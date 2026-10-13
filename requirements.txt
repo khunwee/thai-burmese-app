@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+edge-tts
+deep-translator
+python-multipart
+imageio-ffmpeg
+PyJWT

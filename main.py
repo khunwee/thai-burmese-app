@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Form, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
 import edge_tts
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 import os
@@ -11,35 +10,29 @@ import hashlib
 import jwt
 import datetime
 
-# --- CONFIG ---
-SECRET_KEY = "super-secret-key-for-jwt" # เปลี่ยนเป็นรหัสที่เดายากเวลาใช้งานจริง
+SECRET_KEY = "super-secret-key-for-jwt"
 DB_FILE = "app.db"
 
 app = FastAPI()
 
-# --- DATABASE SETUP ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # ตารางผู้ใช้งาน
     c.execute('''CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT UNIQUE,
                     password_hash TEXT,
                     role TEXT)''')
-    # ตารางตั้งค่า
     c.execute('''CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT)''')
     
-    # สร้าง Admin เริ่มต้น (admin / 123456)
     c.execute("SELECT * FROM users WHERE username='admin'")
     if not c.fetchone():
         pwd_hash = hashlib.sha256("123456".encode()).hexdigest()
         c.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", 
                   ("admin", pwd_hash, "admin"))
     
-    # สร้างการตั้งค่าเริ่มต้น
     defaults = {
         "default_engine": "auto",
         "default_rate": "+15%",
@@ -55,7 +48,6 @@ def init_db():
 
 init_db()
 
-# --- HELPERS ---
 def get_db():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
@@ -80,8 +72,6 @@ def verify_token(request: Request):
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-# --- ENDPOINTS ---
-
 @app.get("/", response_class=HTMLResponse)
 async def get_home():
     with open("index.html", "r", encoding="utf-8") as f:
@@ -95,7 +85,6 @@ async def login(username: str = Form(...), password: str = Form(...)):
     conn.close()
     
     if user:
-        # สร้าง JWT Token (มีอายุ 24 ชั่วโมง)
         payload = {
             "sub": user["username"],
             "role": user["role"],
@@ -106,6 +95,54 @@ async def login(username: str = Form(...), password: str = Form(...)):
     else:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+# --- USER MANAGEMENT ENDPOINTS ---
+@app.get("/api/users")
+async def get_users(user = Depends(verify_token)):
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    conn = get_db()
+    rows = conn.execute("SELECT id, username, role FROM users").fetchall()
+    conn.close()
+    return [{"id": r["id"], "username": r["username"], "role": r["role"]} for r in rows]
+
+@app.post("/api/users")
+async def create_user(
+    username: str = Form(...),
+    password: str = Form(...),
+    role: str = Form("user"),
+    user = Depends(verify_token)
+):
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    conn = get_db()
+    existing = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+    if existing:
+        conn.close()
+        raise HTTPException(status_code=400, detail="มีชื่อผู้ใช้งานนี้อยู่ในระบบแล้ว")
+    
+    pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+    conn.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", (username, pwd_hash, role))
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
+
+@app.delete("/api/users/{user_id}")
+async def delete_user(user_id: int, user = Depends(verify_token)):
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    conn = get_db()
+    target = conn.execute("SELECT username FROM users WHERE id=?", (user_id,)).fetchone()
+    if target and target["username"] == "admin":
+        conn.close()
+        raise HTTPException(status_code=400, detail="ไม่สามารถลบบัญชี Admin เริ่มต้นได้")
+    
+    conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
+
+
+# --- SETTINGS ENDPOINTS ---
 @app.get("/api/settings")
 async def get_settings(user = Depends(verify_token)):
     conn = get_db()
@@ -140,6 +177,7 @@ async def update_settings(
     conn.close()
     return {"status": "success"}
 
+# --- TRANSLATION ENDPOINT ---
 @app.post("/process")
 async def process_text(
     text: str = Form(...), 
@@ -148,7 +186,7 @@ async def process_text(
     voice: str = Form(...),
     audio_format: str = Form(...),
     engine: str = Form(...),
-    user = Depends(verify_token) # บังคับ Login
+    user = Depends(verify_token)
 ):
     try:
         burmese_text = ""

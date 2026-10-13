@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: thai-burmese-secure
+    name: thai-burmese-admin
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt

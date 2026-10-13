@@ -16,7 +16,7 @@
 </head>
 <body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen flex items-center justify-center p-4" id="mainBody">
     
-    <!-- 1. LOGIN SCREEN -->
+    <!-- 1. LOGIN SCREEN (Removed default password text) -->
     <div class="glass-panel rounded-2xl shadow-xl w-full max-w-sm overflow-hidden relative" id="loginScreen">
         <div class="bg-blue-600 p-6 text-center text-white">
             <h2 class="text-2xl font-bold">เข้าสู่ระบบ</h2>
@@ -35,7 +35,6 @@
                 เข้าสู่ระบบ
             </button>
             <p id="loginError" class="text-red-500 text-sm text-center hidden-view">รหัสผ่านไม่ถูกต้อง!</p>
-            <p class="text-xs text-gray-400 text-center mt-4">ค่าเริ่มต้น Admin: admin / 123456</p>
         </div>
     </div>
 
@@ -47,7 +46,7 @@
                 วุ้นแปลภาษาพม่า
             </h2>
             <div class="flex gap-2">
-                <button id="adminBtn" onclick="openAdmin()" class="hidden-view bg-indigo-500 hover:bg-indigo-600 px-3 py-1.5 rounded-lg text-sm font-medium transition shadow-sm">ตั้งค่า (Admin)</button>
+                <button id="adminBtn" onclick="openAdmin()" class="hidden-view bg-indigo-500 hover:bg-indigo-600 px-3 py-1.5 rounded-lg text-sm font-medium transition shadow-sm">จัดการ (Admin)</button>
                 <button onclick="logout()" class="bg-red-500 hover:bg-red-600 px-3 py-1.5 rounded-lg text-sm font-medium transition shadow-sm">ออกระบบ</button>
             </div>
         </div>
@@ -126,42 +125,81 @@
         </div>
     </div>
 
-    <!-- 3. ADMIN MODAL -->
+    <!-- 3. ADMIN MODAL (Added Tab for User Management) -->
     <div id="adminModal" class="fixed inset-0 bg-black bg-opacity-50 hidden-view flex items-center justify-center z-50 p-4">
-        <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
-            <div class="bg-indigo-600 p-4 text-white flex justify-between items-center">
-                <h2 class="font-bold">ตั้งค่าระบบ (Admin Only)</h2>
-                <button onclick="closeAdmin()" class="text-white hover:text-gray-200 font-bold">&times;</button>
+        <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden flex flex-col max-h-[90vh]">
+            <div class="bg-indigo-600 p-4 text-white flex justify-between items-center shrink-0">
+                <h2 class="font-bold">จัดการระบบ (Admin)</h2>
+                <button onclick="closeAdmin()" class="text-white hover:text-gray-200 font-bold text-xl">&times;</button>
             </div>
-            <div class="p-4 space-y-3">
-                <p class="text-xs text-gray-500 mb-2">ตั้งค่าเริ่มต้นที่จะแสดงให้ผู้ใช้งานเห็น</p>
-                
-                <label class="block text-xs font-medium">Engine เริ่มต้น</label>
-                <select id="setEngine" class="w-full border rounded p-1.5 text-sm mb-2">
-                    <option value="auto">อัตโนมัติ</option><option value="google">Google</option><option value="mymemory">MyMemory</option>
-                </select>
+            
+            <div class="flex border-b text-sm shrink-0">
+                <button id="tabSettingsBtn" onclick="switchAdminTab('settings')" class="flex-1 py-2 font-bold text-indigo-600 border-b-2 border-indigo-600">ตั้งค่าเริ่มต้น</button>
+                <button id="tabUsersBtn" onclick="switchAdminTab('users')" class="flex-1 py-2 font-bold text-gray-500 hover:text-indigo-600">จัดการผู้ใช้</button>
+            </div>
 
-                <label class="block text-xs font-medium">เสียงผู้พูดเริ่มต้น</label>
-                <select id="setVoice" class="w-full border rounded p-1.5 text-sm mb-2">
-                    <option value="my-MM-NilarNeural">หญิง</option><option value="my-MM-ThihaNeural">ชาย</option>
-                </select>
+            <div class="p-4 overflow-y-auto flex-1">
+                <!-- Tab: Settings -->
+                <div id="tabSettings" class="space-y-3">
+                    <p class="text-xs text-gray-500 mb-2">ตั้งค่าเริ่มต้นที่จะแสดงให้ผู้ใช้งานเห็น</p>
+                    
+                    <label class="block text-xs font-medium">Engine เริ่มต้น</label>
+                    <select id="setEngine" class="w-full border rounded p-1.5 text-sm mb-2">
+                        <option value="auto">อัตโนมัติ</option><option value="google">Google</option><option value="mymemory">MyMemory</option>
+                    </select>
 
-                <label class="block text-xs font-medium">โทนเสียงเริ่มต้น</label>
-                <select id="setPitch" class="w-full border rounded p-1.5 text-sm mb-2">
-                    <option value="+20Hz">เด็ก</option><option value="+0Hz">ทำงาน</option><option value="-15Hz">คนแก่</option>
-                </select>
+                    <label class="block text-xs font-medium">เสียงผู้พูดเริ่มต้น</label>
+                    <select id="setVoice" class="w-full border rounded p-1.5 text-sm mb-2">
+                        <option value="my-MM-NilarNeural">หญิง</option><option value="my-MM-ThihaNeural">ชาย</option>
+                    </select>
 
-                <label class="block text-xs font-medium">ความเร็วเริ่มต้น</label>
-                <select id="setRate" class="w-full border rounded p-1.5 text-sm mb-2">
-                    <option value="+0%">ปกติ</option><option value="+15%">+15%</option><option value="+25%">+25%</option>
-                </select>
+                    <label class="block text-xs font-medium">โทนเสียงเริ่มต้น</label>
+                    <select id="setPitch" class="w-full border rounded p-1.5 text-sm mb-2">
+                        <option value="+20Hz">เด็ก</option><option value="+0Hz">ทำงาน</option><option value="-15Hz">คนแก่</option>
+                    </select>
 
-                <label class="block text-xs font-medium">ฟอร์แมตเริ่มต้น</label>
-                <select id="setFormat" class="w-full border rounded p-1.5 text-sm mb-2">
-                    <option value="mp3">MP3</option><option value="wav">WAV</option><option value="ogg">OGG</option>
-                </select>
+                    <label class="block text-xs font-medium">ความเร็วเริ่มต้น</label>
+                    <select id="setRate" class="w-full border rounded p-1.5 text-sm mb-2">
+                        <option value="+0%">ปกติ</option><option value="+15%">+15%</option><option value="+25%">+25%</option>
+                    </select>
 
-                <button onclick="saveAdminSettings()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg mt-4 text-sm font-bold">บันทึกการตั้งค่า</button>
+                    <label class="block text-xs font-medium">ฟอร์แมตเริ่มต้น</label>
+                    <select id="setFormat" class="w-full border rounded p-1.5 text-sm mb-2">
+                        <option value="mp3">MP3</option><option value="wav">WAV</option><option value="ogg">OGG</option>
+                    </select>
+
+                    <button onclick="saveAdminSettings()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg mt-4 text-sm font-bold">บันทึกการตั้งค่า</button>
+                </div>
+
+                <!-- Tab: Users -->
+                <div id="tabUsers" class="hidden-view space-y-4">
+                    <div class="bg-gray-50 p-3 rounded border">
+                        <h3 class="text-xs font-bold text-gray-700 mb-2">เพิ่มผู้ใช้งานใหม่</h3>
+                        <div class="flex gap-2 mb-2">
+                            <input type="text" id="newUsername" placeholder="ชื่อบัญชี (User)" class="flex-1 border rounded px-2 py-1 text-sm outline-none">
+                            <input type="password" id="newPassword" placeholder="รหัสผ่าน" class="flex-1 border rounded px-2 py-1 text-sm outline-none">
+                        </div>
+                        <select id="newRole" class="w-full border rounded px-2 py-1 text-sm mb-2 outline-none">
+                            <option value="user">ผู้ใช้ทั่วไป (ใช้งานได้อย่างเดียว)</option>
+                            <option value="admin">แอดมิน (ตั้งค่าและเพิ่มคนได้)</option>
+                        </select>
+                        <button onclick="createUser()" class="w-full bg-green-600 hover:bg-green-700 text-white py-1.5 rounded text-sm font-bold shadow-sm">เพิ่มบัญชีผู้ใช้</button>
+                    </div>
+                    
+                    <div>
+                        <h3 class="text-xs font-bold text-gray-700 mb-2">รายชื่อผู้ใช้งานในระบบ</h3>
+                        <div class="border rounded overflow-y-auto" style="max-height: 150px;">
+                            <table class="w-full text-sm text-left">
+                                <thead class="bg-gray-100 sticky top-0">
+                                    <tr><th class="p-2">ชื่อบัญชี</th><th class="p-2">สิทธิ์</th><th class="p-2 text-right">จัดการ</th></tr>
+                                </thead>
+                                <tbody id="usersListTable">
+                                    <!-- Dynamic Rows -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -220,7 +258,6 @@
                 document.getElementById("adminBtn").classList.remove("hidden-view");
             }
 
-            // Fetch Settings
             try {
                 const res = await fetch("/api/settings", { headers: { "Authorization": `Bearer ${token}` } });
                 if(res.ok) {
@@ -300,13 +337,29 @@
             }
         }
 
-        // --- ADMIN SETTINGS ---
+        // --- ADMIN SETTINGS & USERS ---
+        function switchAdminTab(tab) {
+            if(tab === 'settings') {
+                document.getElementById('tabSettings').classList.remove('hidden-view');
+                document.getElementById('tabUsers').classList.add('hidden-view');
+                document.getElementById('tabSettingsBtn').className = "flex-1 py-2 font-bold text-indigo-600 border-b-2 border-indigo-600";
+                document.getElementById('tabUsersBtn').className = "flex-1 py-2 font-bold text-gray-500 hover:text-indigo-600";
+            } else {
+                document.getElementById('tabSettings').classList.add('hidden-view');
+                document.getElementById('tabUsers').classList.remove('hidden-view');
+                document.getElementById('tabSettingsBtn').className = "flex-1 py-2 font-bold text-gray-500 hover:text-indigo-600";
+                document.getElementById('tabUsersBtn').className = "flex-1 py-2 font-bold text-indigo-600 border-b-2 border-indigo-600";
+                loadUsers();
+            }
+        }
+
         function openAdmin() {
             document.getElementById("setEngine").value = document.getElementById('engineSelect').value;
             document.getElementById("setVoice").value = document.getElementById('voiceSelect').value;
             document.getElementById("setPitch").value = document.getElementById('pitchSelect').value;
             document.getElementById("setRate").value = document.getElementById('rateSelect').value;
             document.getElementById("setFormat").value = document.getElementById('formatSelect').value;
+            switchAdminTab('settings');
             document.getElementById("adminModal").classList.remove("hidden-view");
         }
         function closeAdmin() { document.getElementById("adminModal").classList.add("hidden-view"); }
@@ -316,23 +369,86 @@
             const fd = new FormData();
             fd.append("default_engine", document.getElementById("setEngine").value);
             fd.append("default_voice", document.getElementById("setVoice").value);
-            
             fd.append("default_pitch", document.getElementById("setPitch").value);
             fd.append("default_rate", document.getElementById("setRate").value);
             fd.append("default_format", document.getElementById("setFormat").value);
 
             try {
                 const res = await fetch("/api/settings", {
-                    method: "POST",
-                    body: fd,
-                    headers: { "Authorization": `Bearer ${token}` }
+                    method: "POST", body: fd, headers: { "Authorization": `Bearer ${token}` }
                 });
                 if(res.ok) {
                     alert("บันทึกการตั้งค่าสำเร็จ! ผู้ใช้ใหม่จะเห็นค่าเริ่มต้นนี้");
                     closeAdmin();
-                    loadSettingsAndShowApp(token); // reload dropdowns
+                    loadSettingsAndShowApp(token);
                 } else { alert("เกิดข้อผิดพลาดในการบันทึก"); }
             } catch(e) { alert("เชื่อมต่อล้มเหลว"); }
+        }
+
+        async function loadUsers() {
+            const token = localStorage.getItem("app_token");
+            try {
+                const res = await fetch("/api/users", { headers: { "Authorization": `Bearer ${token}` } });
+                if(res.ok) {
+                    const users = await res.json();
+                    const tbody = document.getElementById('usersListTable');
+                    tbody.innerHTML = "";
+                    users.forEach(u => {
+                        const tr = document.createElement('tr');
+                        tr.className = "border-t";
+                        const roleLabel = u.role === 'admin' ? '<span class="text-xs text-red-500 font-bold">Admin</span>' : '<span class="text-xs text-blue-500 font-bold">User</span>';
+                        tr.innerHTML = `
+                            <td class="p-2">${u.username}</td>
+                            <td class="p-2">${roleLabel}</td>
+                            <td class="p-2 text-right">
+                                ${u.username !== 'admin' ? `<button onclick="deleteUser(${u.id})" class="text-red-500 hover:text-red-700 text-xs font-bold px-2 py-1 bg-red-50 rounded">ลบ</button>` : ''}
+                            </td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                }
+            } catch(e) {}
+        }
+
+        async function createUser() {
+            const token = localStorage.getItem("app_token");
+            const u = document.getElementById("newUsername").value.trim();
+            const p = document.getElementById("newPassword").value.trim();
+            const r = document.getElementById("newRole").value;
+            if(!u || !p) { alert("กรุณากรอกชื่อผู้ใช้และรหัสผ่าน"); return; }
+            
+            const fd = new FormData();
+            fd.append("username", u); fd.append("password", p); fd.append("role", r);
+            
+            try {
+                const res = await fetch("/api/users", {
+                    method: "POST", body: fd, headers: { "Authorization": `Bearer ${token}` }
+                });
+                if(res.ok) {
+                    document.getElementById("newUsername").value = "";
+                    document.getElementById("newPassword").value = "";
+                    loadUsers();
+                } else {
+                    const data = await res.json();
+                    alert(data.detail || "ไม่สามารถเพิ่มผู้ใช้ได้");
+                }
+            } catch(e) { alert("เกิดข้อผิดพลาด"); }
+        }
+
+        async function deleteUser(id) {
+            if(!confirm("ยืนยันการลบบัญชีผู้ใช้นี้?")) return;
+            const token = localStorage.getItem("app_token");
+            try {
+                const res = await fetch(`/api/users/${id}`, {
+                    method: "DELETE", headers: { "Authorization": `Bearer ${token}` }
+                });
+                if(res.ok) {
+                    loadUsers();
+                } else {
+                    const data = await res.json();
+                    alert(data.detail || "ลบผู้ใช้งานไม่สำเร็จ");
+                }
+            } catch(e) {}
         }
     </script>
 </body>

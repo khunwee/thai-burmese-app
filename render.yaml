@@ -1,10 +1,17 @@
 services:
   - type: web
-    name: thai-burmese-admin
-    env: python
+    name: thai-burmese-cloud
+    runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"
+    healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10.0
+        value: 3.11.9
+      - key: DATABASE_URL      # Supabase connection string (Session pooler) — set in the Render dashboard
+        sync: false
+      - key: JWT_SECRET        # random, generated once by Render
+        generateValue: true
+      - key: ADMIN_PASSWORD    # optional: first admin password when the DB is brand-new
+        sync: false

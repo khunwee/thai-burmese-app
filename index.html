@@ -1,455 +1,691 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ระบบประกาศเสียงภาษาพม่า (Secure)</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'Sarabun', sans-serif; transition: background-color 0.5s; }
-        .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.2); transition: all 0.3s ease; }
-        .hidden-view { display: none !important; }
-        input:checked ~ .toggle-bg { background-color: #3b82f6; }
-        input:checked ~ .toggle-dot { transform: translateX(100%); }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>วุ้นแปลภาษาพม่า V14</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=Noto+Sans+Myanmar:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  body { font-family: 'Sarabun', sans-serif; }
+  .my-text { font-family: 'Noto Sans Myanmar', 'Myanmar Text', 'Padauk', sans-serif; line-height: 1.9; }
+  .hidden-view { display: none !important; }
+  .toggle input:checked ~ .tbg { background-color: #2563eb; }
+  .toggle input:checked ~ .tdot { transform: translateX(100%); }
+  .chip { transition: all .15s; }
+  .spinner { border: 3px solid #bfdbfe; border-top-color: #2563eb; border-radius: 50%; width: 18px; height: 18px; animation: spin .8s linear infinite; display: inline-block; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast { animation: fadein .2s; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+  label.sel { display:block; font-size:12px; font-weight:500; color:#374151; margin-bottom:4px; }
+  select.inp, input.inp, textarea.inp { width:100%; border:1px solid #d1d5db; border-radius:8px; padding:6px 8px; font-size:13px; background:#fff; outline:none; }
+  select.inp:focus, input.inp:focus, textarea.inp:focus { box-shadow: 0 0 0 2px #93c5fd; border-color:#3b82f6; }
+</style>
 </head>
-<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen flex items-center justify-center p-4" id="mainBody">
-    
-    <!-- 1. LOGIN SCREEN (Removed default password text) -->
-    <div class="glass-panel rounded-2xl shadow-xl w-full max-w-sm overflow-hidden relative" id="loginScreen">
-        <div class="bg-blue-600 p-6 text-center text-white">
-            <h2 class="text-2xl font-bold">เข้าสู่ระบบ</h2>
-            <p class="text-sm text-blue-200 mt-1">วุ้นแปลภาษาพม่า</p>
-        </div>
-        <div class="p-6 space-y-4">
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อผู้ใช้ (Username)</label>
-                <input type="text" id="username" class="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 outline-none">
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">รหัสผ่าน (Password)</label>
-                <input type="password" id="password" class="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 outline-none" onkeypress="if(event.key==='Enter') login()">
-            </div>
-            <button onclick="login()" id="loginBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg shadow-md transition-colors">
-                เข้าสู่ระบบ
-            </button>
-            <p id="loginError" class="text-red-500 text-sm text-center hidden-view">รหัสผ่านไม่ถูกต้อง!</p>
-        </div>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
+
+<!-- Toasts -->
+<div id="toasts" class="fixed top-3 right-3 left-3 sm:left-auto z-[100] flex flex-col gap-2 items-end pointer-events-none"></div>
+
+<!-- Server banner (DB not configured / cold start) -->
+<div id="banner" class="hidden-view fixed top-0 inset-x-0 z-[90] text-center text-sm py-2 px-3"></div>
+
+<!-- 1. LOGIN -->
+<div id="loginScreen" class="hidden-view min-h-screen flex items-center justify-center p-4">
+  <div class="bg-white/95 rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
+    <div class="bg-blue-600 p-6 text-center text-white">
+      <h2 class="text-2xl font-bold">เข้าสู่ระบบ</h2>
+      <p class="text-sm text-blue-200 mt-1">วุ้นแปลภาษาพม่า · ระบบประกาศเสียง</p>
+    </div>
+    <form class="p-6 space-y-4" onsubmit="event.preventDefault(); login();">
+      <div><label class="sel">ชื่อผู้ใช้ (Username)</label><input id="username" class="inp" autocomplete="username" required></div>
+      <div><label class="sel">รหัสผ่าน (Password)</label><input id="password" type="password" class="inp" autocomplete="current-password" required></div>
+      <button id="loginBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg shadow">เข้าสู่ระบบ</button>
+      <p id="loginError" class="text-red-600 text-sm text-center hidden-view"></p>
+    </form>
+  </div>
+</div>
+
+<!-- 2. MAIN APP -->
+<div id="appScreen" class="hidden-view min-h-screen flex justify-center p-3 sm:p-6">
+  <div class="w-full max-w-2xl space-y-4">
+    <div class="bg-blue-600 rounded-2xl shadow-lg p-4 flex flex-wrap gap-2 justify-between items-center text-white">
+      <div>
+        <h1 class="text-xl font-semibold flex items-center gap-2">
+          <span id="liveDot" class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span></span>
+          วุ้นแปลภาษาพม่า
+        </h1>
+        <p class="text-xs text-blue-100 mt-0.5">ผู้ใช้: <b id="whoami"></b></p>
+      </div>
+      <div class="flex flex-wrap gap-2 text-sm">
+        <button onclick="openHistory()" class="bg-blue-500 hover:bg-blue-400 px-3 py-1.5 rounded-lg">ประวัติ</button>
+        <button onclick="openPwModal(false)" class="bg-blue-500 hover:bg-blue-400 px-3 py-1.5 rounded-lg">เปลี่ยนรหัสผ่าน</button>
+        <button id="adminBtn" onclick="openAdmin()" class="hidden-view bg-indigo-500 hover:bg-indigo-400 px-3 py-1.5 rounded-lg">จัดการ (Admin)</button>
+        <button onclick="logout()" class="bg-red-500 hover:bg-red-600 px-3 py-1.5 rounded-lg">ออกจากระบบ</button>
+      </div>
     </div>
 
-    <!-- 2. MAIN APP SCREEN -->
-    <div class="glass-panel rounded-2xl shadow-xl w-full max-w-lg overflow-hidden relative hidden-view" id="appScreen">
-        <div class="bg-blue-600 p-4 flex justify-between items-center text-white">
-            <h2 class="text-xl font-semibold flex items-center gap-2">
-                <span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span></span>
-                วุ้นแปลภาษาพม่า
-            </h2>
-            <div class="flex gap-2">
-                <button id="adminBtn" onclick="openAdmin()" class="hidden-view bg-indigo-500 hover:bg-indigo-600 px-3 py-1.5 rounded-lg text-sm font-medium transition shadow-sm">จัดการ (Admin)</button>
-                <button onclick="logout()" class="bg-red-500 hover:bg-red-600 px-3 py-1.5 rounded-lg text-sm font-medium transition shadow-sm">ออกระบบ</button>
-            </div>
-        </div>
-        
-        <div class="p-6 space-y-4">
-            <div>
-                <div class="flex justify-between items-end mb-2">
-                    <label class="block text-sm font-medium text-gray-700">พิมพ์ข้อความภาษาไทย</label>
-                    <label class="flex items-center cursor-pointer">
-                      <div class="relative">
-                        <input type="checkbox" id="realtimeToggle" class="sr-only">
-                        <div class="block bg-gray-300 w-10 h-6 rounded-full toggle-bg"></div>
-                        <div class="dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition toggle-dot"></div>
-                      </div>
-                      <span class="ml-2 text-xs text-gray-600 font-medium">Real-Time</span>
-                    </label>
-                </div>
-                <textarea id="textInput" rows="3" class="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors resize-none shadow-sm" placeholder="พิมพ์ข้อความ..."></textarea>
-            </div>
-            
-            <div class="grid grid-cols-2 gap-3 bg-gray-50 p-3 rounded-lg border border-gray-200">
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">ผู้พูด (เสียง)</label>
-                    <select id="voiceSelect" class="w-full px-2 py-1.5 rounded-md border border-gray-300 focus:ring-2 focus:ring-blue-500 bg-white shadow-sm text-xs" onchange="triggerTranslate()">
-                        <option value="my-MM-NilarNeural">หญิง (Nilar)</option>
-                        <option value="my-MM-ThihaNeural">ชาย (Thiha)</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">โทนเสียงจำลองวัย</label>
-                    <select id="pitchSelect" class="w-full px-2 py-1.5 rounded-md border border-gray-300 focus:ring-2 focus:ring-blue-500 bg-white shadow-sm text-xs" onchange="triggerTranslate()">
-                        <option value="+20Hz">โทนเสียงเด็ก (แหลม)</option>
-                        <option value="+0Hz">วัยทำงาน (ปกติ)</option>
-                        <option value="-15Hz">ผู้สูงอายุ (ทุ้ม)</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">ความเร็วเสียง</label>
-                    <select id="rateSelect" class="w-full px-2 py-1.5 rounded-md border border-gray-300 focus:ring-2 focus:ring-blue-500 bg-white shadow-sm text-xs" onchange="triggerTranslate()">
-                        <option value="+0%">ปกติ (ช้า)</option>
-                        <option value="+15%">+15% (แนะนำ)</option>
-                        <option value="+25%">+25% (เร็ว)</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">ช่องทางแปลภาษา</label>
-                    <select id="engineSelect" class="w-full px-2 py-1.5 rounded-md border border-gray-300 focus:ring-2 focus:ring-blue-500 bg-white shadow-sm text-xs" onchange="triggerTranslate()">
-                        <option value="auto">อัตโนมัติ</option>
-                        <option value="google">Google</option>
-                        <option value="mymemory">MyMemory</option>
-                    </select>
-                </div>
-            </div>
-
-            <button id="speakBtn" onclick="translateAndSpeak()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg shadow-md transition-colors">แปลและเล่นเสียง</button>
-            <div id="loadingDiv" class="hidden-view text-center text-blue-600 font-medium py-2 text-sm">กำลังประมวลผล...</div>
-            
-            <div id="resultBox" class="hidden-view bg-green-50 rounded-lg p-4 border border-green-200">
-                <div class="flex justify-between items-center mb-1">
-                    <p class="text-xs text-green-600 font-bold uppercase">คำแปล (พม่า)</p>
-                    <span id="engineBadge" class="bg-green-200 text-green-800 text-[10px] px-2 py-0.5 rounded-full font-semibold"></span>
-                </div>
-                <p id="resultText" class="text-lg text-gray-800 font-medium mb-3"></p>
-                <audio id="audioPlayer" controls class="w-full h-8 outline-none mb-3"></audio>
-                <div class="flex items-center gap-2">
-                    <select id="formatSelect" class="w-1/3 px-2 py-2 rounded-lg border border-gray-300 bg-white shadow-sm text-xs">
-                        <option value="mp3">MP3</option>
-                        <option value="wav">WAV</option>
-                        <option value="ogg">OGG</option>
-                    </select>
-                    <a id="downloadBtn" href="#" onclick="updateDownloadLink(event)" class="w-2/3 bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-2 rounded-lg shadow-sm transition-colors flex items-center justify-center text-xs">
-                        ดาวน์โหลด
-                    </a>
-                </div>
-            </div>
-        </div>
+    <!-- Quick phrases -->
+    <div id="phrasesCard" class="hidden-view bg-white/95 rounded-2xl shadow p-4">
+      <div class="flex justify-between items-center mb-2">
+        <h3 class="text-sm font-bold text-gray-700">ข้อความสำเร็จรูป</h3>
+        <select id="phraseCat" class="inp" style="width:auto" onchange="renderPhraseChips()"></select>
+      </div>
+      <div id="phraseChips" class="flex flex-wrap gap-2 max-h-40 overflow-y-auto"></div>
+      <p class="text-[11px] text-gray-400 mt-2">คลิก = ใส่ข้อความ · ดับเบิลคลิก = ประกาศทันที</p>
     </div>
 
-    <!-- 3. ADMIN MODAL (Added Tab for User Management) -->
-    <div id="adminModal" class="fixed inset-0 bg-black bg-opacity-50 hidden-view flex items-center justify-center z-50 p-4">
-        <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden flex flex-col max-h-[90vh]">
-            <div class="bg-indigo-600 p-4 text-white flex justify-between items-center shrink-0">
-                <h2 class="font-bold">จัดการระบบ (Admin)</h2>
-                <button onclick="closeAdmin()" class="text-white hover:text-gray-200 font-bold text-xl">&times;</button>
-            </div>
-            
-            <div class="flex border-b text-sm shrink-0">
-                <button id="tabSettingsBtn" onclick="switchAdminTab('settings')" class="flex-1 py-2 font-bold text-indigo-600 border-b-2 border-indigo-600">ตั้งค่าเริ่มต้น</button>
-                <button id="tabUsersBtn" onclick="switchAdminTab('users')" class="flex-1 py-2 font-bold text-gray-500 hover:text-indigo-600">จัดการผู้ใช้</button>
-            </div>
-
-            <div class="p-4 overflow-y-auto flex-1">
-                <!-- Tab: Settings -->
-                <div id="tabSettings" class="space-y-3">
-                    <p class="text-xs text-gray-500 mb-2">ตั้งค่าเริ่มต้นที่จะแสดงให้ผู้ใช้งานเห็น</p>
-                    
-                    <label class="block text-xs font-medium">Engine เริ่มต้น</label>
-                    <select id="setEngine" class="w-full border rounded p-1.5 text-sm mb-2">
-                        <option value="auto">อัตโนมัติ</option><option value="google">Google</option><option value="mymemory">MyMemory</option>
-                    </select>
-
-                    <label class="block text-xs font-medium">เสียงผู้พูดเริ่มต้น</label>
-                    <select id="setVoice" class="w-full border rounded p-1.5 text-sm mb-2">
-                        <option value="my-MM-NilarNeural">หญิง</option><option value="my-MM-ThihaNeural">ชาย</option>
-                    </select>
-
-                    <label class="block text-xs font-medium">โทนเสียงเริ่มต้น</label>
-                    <select id="setPitch" class="w-full border rounded p-1.5 text-sm mb-2">
-                        <option value="+20Hz">เด็ก</option><option value="+0Hz">ทำงาน</option><option value="-15Hz">คนแก่</option>
-                    </select>
-
-                    <label class="block text-xs font-medium">ความเร็วเริ่มต้น</label>
-                    <select id="setRate" class="w-full border rounded p-1.5 text-sm mb-2">
-                        <option value="+0%">ปกติ</option><option value="+15%">+15%</option><option value="+25%">+25%</option>
-                    </select>
-
-                    <label class="block text-xs font-medium">ฟอร์แมตเริ่มต้น</label>
-                    <select id="setFormat" class="w-full border rounded p-1.5 text-sm mb-2">
-                        <option value="mp3">MP3</option><option value="wav">WAV</option><option value="ogg">OGG</option>
-                    </select>
-
-                    <button onclick="saveAdminSettings()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg mt-4 text-sm font-bold">บันทึกการตั้งค่า</button>
-                </div>
-
-                <!-- Tab: Users -->
-                <div id="tabUsers" class="hidden-view space-y-4">
-                    <div class="bg-gray-50 p-3 rounded border">
-                        <h3 class="text-xs font-bold text-gray-700 mb-2">เพิ่มผู้ใช้งานใหม่</h3>
-                        <div class="flex gap-2 mb-2">
-                            <input type="text" id="newUsername" placeholder="ชื่อบัญชี (User)" class="flex-1 border rounded px-2 py-1 text-sm outline-none">
-                            <input type="password" id="newPassword" placeholder="รหัสผ่าน" class="flex-1 border rounded px-2 py-1 text-sm outline-none">
-                        </div>
-                        <select id="newRole" class="w-full border rounded px-2 py-1 text-sm mb-2 outline-none">
-                            <option value="user">ผู้ใช้ทั่วไป (ใช้งานได้อย่างเดียว)</option>
-                            <option value="admin">แอดมิน (ตั้งค่าและเพิ่มคนได้)</option>
-                        </select>
-                        <button onclick="createUser()" class="w-full bg-green-600 hover:bg-green-700 text-white py-1.5 rounded text-sm font-bold shadow-sm">เพิ่มบัญชีผู้ใช้</button>
-                    </div>
-                    
-                    <div>
-                        <h3 class="text-xs font-bold text-gray-700 mb-2">รายชื่อผู้ใช้งานในระบบ</h3>
-                        <div class="border rounded overflow-y-auto" style="max-height: 150px;">
-                            <table class="w-full text-sm text-left">
-                                <thead class="bg-gray-100 sticky top-0">
-                                    <tr><th class="p-2">ชื่อบัญชี</th><th class="p-2">สิทธิ์</th><th class="p-2 text-right">จัดการ</th></tr>
-                                </thead>
-                                <tbody id="usersListTable">
-                                    <!-- Dynamic Rows -->
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
+    <div class="bg-white/95 rounded-2xl shadow p-4 sm:p-6 space-y-4">
+      <div>
+        <div class="flex justify-between items-end mb-2">
+          <label class="text-sm font-medium text-gray-700">พิมพ์ข้อความภาษาไทย</label>
+          <label class="toggle flex items-center cursor-pointer" title="แปลอัตโนมัติเมื่อหยุดพิมพ์ 2 วินาที">
+            <div class="relative"><input type="checkbox" id="realtimeToggle" class="sr-only">
+              <div class="tbg block bg-gray-300 w-10 h-6 rounded-full"></div>
+              <div class="tdot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition"></div></div>
+            <span class="ml-2 text-xs text-gray-600 font-medium">Real-Time</span>
+          </label>
         </div>
+        <textarea id="textInput" rows="3" class="inp" style="font-size:16px;padding:10px 12px" placeholder="พิมพ์ข้อความ... (Ctrl+Enter = แปลและเล่นเสียง)"></textarea>
+        <div class="flex justify-between text-[11px] text-gray-400 mt-1">
+          <button onclick="clearText()" class="hover:text-red-500">ล้างข้อความ</button>
+          <span id="charCount">0</span>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-gray-50 p-3 rounded-lg border">
+        <div><label class="sel">ผู้พูด (เสียงพม่า)</label>
+          <select id="voiceSelect" class="inp" onchange="triggerTranslate()">
+            <option value="my-MM-NilarNeural">หญิง (Nilar)</option>
+            <option value="my-MM-ThihaNeural">ชาย (Thiha)</option></select></div>
+        <div><label class="sel">โทนเสียงจำลองวัย</label>
+          <select id="pitchSelect" class="inp" onchange="triggerTranslate()">
+            <option value="+20Hz">เด็ก (แหลม)</option><option value="+10Hz">วัยรุ่น</option>
+            <option value="+0Hz">วัยทำงาน (ปกติ)</option><option value="-15Hz">ผู้สูงอายุ (ทุ้ม)</option></select></div>
+        <div><label class="sel">ความเร็วเสียง</label>
+          <select id="rateSelect" class="inp" onchange="triggerTranslate()">
+            <option value="-10%">ช้ามาก (-10%)</option><option value="+0%">ปกติ</option>
+            <option value="+15%">+15% (แนะนำ)</option><option value="+25%">+25% (เร็ว)</option>
+            <option value="+40%">+40% (เร็วมาก)</option></select></div>
+        <div><label class="sel">ช่องทางแปลภาษา</label>
+          <select id="engineSelect" class="inp" onchange="triggerTranslate()">
+            <option value="auto">อัตโนมัติ</option><option value="google">Google</option><option value="mymemory">MyMemory</option></select></div>
+        <div><label class="sel">ภาษาที่ประกาศ</label>
+          <select id="langModeSelect" class="inp" onchange="toggleThaiVoice(); triggerTranslate()">
+            <option value="my">พม่าอย่างเดียว</option><option value="th_my">ไทย → พม่า</option><option value="my_th">พม่า → ไทย</option></select></div>
+        <div id="thaiVoiceBox"><label class="sel">เสียงภาษาไทย</label>
+          <select id="thaiVoiceSelect" class="inp">
+            <option value="th-TH-PremwadeeNeural">หญิง (Premwadee)</option>
+            <option value="th-TH-AcharaNeural">หญิง (Achara)</option>
+            <option value="th-TH-NiwatNeural">ชาย (Niwat)</option></select></div>
+        <div><label class="sel">เล่นซ้ำ</label>
+          <select id="repeatSelect" class="inp">
+            <option value="1">1 รอบ</option><option value="2">2 รอบ</option><option value="3">3 รอบ</option><option value="5">5 รอบ</option></select></div>
+      </div>
+
+      <div class="flex gap-2">
+        <button id="speakBtn" onclick="translateAndSpeak()" class="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-medium py-3 rounded-lg shadow">แปลและเล่นเสียง</button>
+        <button onclick="translateAndSpeak(true)" title="ไม่ใช้คำแปลที่จำไว้ แปลใหม่จากอินเทอร์เน็ต" class="px-3 bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 rounded-lg text-sm">แปลใหม่</button>
+      </div>
+      <div id="loadingDiv" class="hidden-view text-center text-blue-600 text-sm py-1"><span class="spinner"></span> <span id="loadingText">กำลังประมวลผล...</span></div>
+
+      <div id="resultBox" class="hidden-view bg-green-50 rounded-lg p-4 border border-green-200 space-y-3">
+        <div class="flex justify-between items-center">
+          <p class="text-xs text-green-700 font-bold">คำแปล (พม่า) — แก้ไขได้</p>
+          <span id="engineBadge" class="bg-green-200 text-green-800 text-[10px] px-2 py-0.5 rounded-full font-semibold"></span>
+        </div>
+        <textarea id="resultText" rows="2" class="inp my-text" style="font-size:18px;background:#fff"></textarea>
+        <div class="flex flex-wrap gap-2 text-xs">
+          <button onclick="speakEdited(false)" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg">พูดคำแปลนี้</button>
+          <button id="saveCorrectionBtn" onclick="speakEdited(true)" class="hidden-view bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg" title="ครั้งต่อไปที่พิมพ์ข้อความไทยเดียวกัน จะใช้คำแปลนี้">บันทึกเป็นคำแปลถาวร</button>
+          <button id="saveAsPhraseBtn" onclick="saveAsPhrase()" class="hidden-view bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-lg">เพิ่มเป็นข้อความสำเร็จรูป</button>
+          <button onclick="copyResult()" class="bg-white border px-3 py-1.5 rounded-lg hover:bg-gray-50">คัดลอก</button>
+        </div>
+        <audio id="audioPlayer" controls class="w-full"></audio>
+        <div class="flex items-center gap-2">
+          <select id="formatSelect" class="inp" style="width:33%"><option value="mp3">MP3</option><option value="wav">WAV</option><option value="ogg">OGG</option></select>
+          <button onclick="downloadAudio()" class="flex-1 bg-green-600 hover:bg-green-700 text-white font-medium py-2 rounded-lg text-sm">ดาวน์โหลดไฟล์เสียง</button>
+        </div>
+      </div>
     </div>
+    <p class="text-center text-[11px] text-gray-400">V14 · <span id="dbState"></span></p>
+  </div>
+</div>
 
-    <script>
-        let typingTimer;                
-        const doneTypingInterval = 2000; 
-        
-        // --- AUTH LOGIC ---
-        window.onload = () => {
-            const token = localStorage.getItem("app_token");
-            if (token) {
-                loadSettingsAndShowApp(token);
-            } else {
-                document.getElementById("loginScreen").classList.remove("hidden-view");
-            }
-        };
+<!-- 3. HISTORY MODAL -->
+<div id="historyModal" class="hidden-view fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onclick="if(event.target===this)closeModal('historyModal')">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg flex flex-col max-h-[90vh] overflow-hidden">
+    <div class="bg-blue-600 p-4 text-white flex justify-between items-center">
+      <h2 class="font-bold">ประวัติการประกาศ</h2>
+      <div class="flex gap-3 items-center">
+        <label id="histAllBox" class="hidden-view text-xs flex items-center gap-1"><input type="checkbox" id="histAll" onchange="loadHistory()"> ทุกคน</label>
+        <button onclick="clearHistory()" class="text-xs bg-blue-500 hover:bg-red-500 px-2 py-1 rounded">ล้างของฉัน</button>
+        <button onclick="closeModal('historyModal')" class="text-xl font-bold">&times;</button>
+      </div>
+    </div>
+    <div id="historyList" class="p-3 overflow-y-auto space-y-2 text-sm"></div>
+  </div>
+</div>
 
-        async function login() {
-            const u = document.getElementById("username").value;
-            const p = document.getElementById("password").value;
-            const btn = document.getElementById("loginBtn");
-            const err = document.getElementById("loginError");
-            
-            btn.innerText = "กำลังตรวจสอบ...";
-            err.classList.add("hidden-view");
+<!-- 4. CHANGE PASSWORD MODAL -->
+<div id="pwModal" class="hidden-view fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+  <form class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5 space-y-3" onsubmit="event.preventDefault(); changePassword();">
+    <h2 class="font-bold text-lg">เปลี่ยนรหัสผ่าน</h2>
+    <p id="pwForceMsg" class="hidden-view text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">บัญชีนี้ยังใช้รหัสผ่านเริ่มต้น/รหัสที่ผู้ดูแลตั้งให้ กรุณาตั้งรหัสผ่านใหม่ก่อนใช้งาน</p>
+    <div><label class="sel">รหัสผ่านเดิม</label><input id="pwOld" type="password" class="inp" autocomplete="current-password" required></div>
+    <div><label class="sel">รหัสผ่านใหม่ (อย่างน้อย 6 ตัว)</label><input id="pwNew" type="password" class="inp" autocomplete="new-password" minlength="6" required></div>
+    <div><label class="sel">ยืนยันรหัสผ่านใหม่</label><input id="pwNew2" type="password" class="inp" autocomplete="new-password" minlength="6" required></div>
+    <div class="flex gap-2 pt-1">
+      <button class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium">บันทึก</button>
+      <button type="button" id="pwCancel" onclick="closeModal('pwModal')" class="px-4 border rounded-lg">ยกเลิก</button>
+    </div>
+  </form>
+</div>
 
-            const fd = new FormData(); fd.append("username", u); fd.append("password", p);
-            
-            try {
-                const res = await fetch("/login", { method: "POST", body: fd });
-                if (res.ok) {
-                    const data = await res.json();
-                    localStorage.setItem("app_token", data.access_token);
-                    localStorage.setItem("app_role", data.role);
-                    loadSettingsAndShowApp(data.access_token);
-                } else {
-                    err.classList.remove("hidden-view");
-                }
-            } catch(e) { err.innerText="การเชื่อมต่อผิดพลาด"; err.classList.remove("hidden-view"); }
-            btn.innerText = "เข้าสู่ระบบ";
-        }
+<!-- 5. ADMIN MODAL -->
+<div id="adminModal" class="hidden-view fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onclick="if(event.target===this)closeModal('adminModal')">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[92vh]">
+    <div class="bg-indigo-600 p-4 text-white flex justify-between items-center shrink-0">
+      <h2 class="font-bold">จัดการระบบ (Admin)</h2>
+      <button onclick="closeModal('adminModal')" class="text-xl font-bold">&times;</button>
+    </div>
+    <div class="flex border-b text-sm shrink-0 overflow-x-auto" id="adminTabs">
+      <button data-tab="users" class="flex-1 py-2 px-3 font-bold whitespace-nowrap">ผู้ใช้งาน</button>
+      <button data-tab="phrases" class="flex-1 py-2 px-3 font-bold whitespace-nowrap">ข้อความสำเร็จรูป</button>
+      <button data-tab="settings" class="flex-1 py-2 px-3 font-bold whitespace-nowrap">ค่าเริ่มต้น</button>
+      <button data-tab="system" class="flex-1 py-2 px-3 font-bold whitespace-nowrap">สถานะระบบ</button>
+    </div>
+    <div class="p-4 overflow-y-auto flex-1">
+      <!-- Users -->
+      <div id="tab-users" class="space-y-4">
+        <form class="bg-gray-50 p-3 rounded-lg border space-y-2" onsubmit="event.preventDefault(); createUser();">
+          <h3 class="text-xs font-bold text-gray-700">เพิ่มผู้ใช้งานใหม่</h3>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <input id="newUsername" class="inp" placeholder="ชื่อบัญชี (3–32 ตัว)" required>
+            <input id="newPassword" type="password" class="inp" placeholder="รหัสผ่าน (≥4 ตัว)" required autocomplete="new-password">
+            <input id="newDisplay" class="inp" placeholder="ชื่อที่แสดง (ไม่บังคับ)">
+          </div>
+          <div class="flex gap-2">
+            <select id="newRole" class="inp"><option value="user">ผู้ใช้ทั่วไป</option><option value="admin">แอดมิน</option></select>
+            <button class="shrink-0 bg-green-600 hover:bg-green-700 text-white px-4 rounded-lg text-sm font-bold">เพิ่มบัญชี</button>
+          </div>
+        </form>
+        <div class="border rounded-lg overflow-x-auto">
+          <table class="w-full text-sm text-left">
+            <thead class="bg-gray-100"><tr><th class="p-2">ชื่อบัญชี</th><th class="p-2">สิทธิ์</th><th class="p-2">สถานะ</th><th class="p-2 hidden sm:table-cell">เข้าใช้ล่าสุด</th><th class="p-2 text-right">จัดการ</th></tr></thead>
+            <tbody id="usersTable"></tbody>
+          </table>
+        </div>
+      </div>
 
-        function logout() {
-            localStorage.removeItem("app_token");
-            localStorage.removeItem("app_role");
-            window.location.reload();
-        }
+      <!-- Phrases -->
+      <div id="tab-phrases" class="space-y-4 hidden-view">
+        <form class="bg-gray-50 p-3 rounded-lg border space-y-2" onsubmit="event.preventDefault(); savePhrase();">
+          <h3 class="text-xs font-bold text-gray-700" id="phraseFormTitle">เพิ่มข้อความสำเร็จรูป</h3>
+          <input type="hidden" id="phId">
+          <div class="grid grid-cols-3 gap-2">
+            <input id="phCat" class="inp col-span-2" placeholder="หมวดหมู่ เช่น ความปลอดภัย, พักเที่ยง" list="catList">
+            <input id="phOrder" type="number" class="inp" placeholder="ลำดับ" value="0">
+          </div>
+          <datalist id="catList"></datalist>
+          <textarea id="phThai" rows="2" class="inp" placeholder="ข้อความภาษาไทย" required></textarea>
+          <div class="flex gap-2 items-start">
+            <textarea id="phMy" rows="2" class="inp my-text" placeholder="คำแปลพม่า (เว้นว่าง = แปลอัตโนมัติตอนใช้งาน)"></textarea>
+            <button type="button" onclick="autoTranslatePhrase()" class="shrink-0 text-xs border border-indigo-300 text-indigo-700 px-2 py-2 rounded-lg hover:bg-indigo-50">แปลให้</button>
+          </div>
+          <div class="flex gap-2">
+            <button class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-1.5 rounded-lg text-sm font-bold">บันทึก</button>
+            <button type="button" onclick="resetPhraseForm()" class="px-3 border rounded-lg text-sm">ล้างฟอร์ม</button>
+          </div>
+        </form>
+        <div id="phraseAdminList" class="space-y-2"></div>
+      </div>
 
-        // --- APP LOGIC ---
-        async function loadSettingsAndShowApp(token) {
-            document.getElementById("loginScreen").classList.add("hidden-view");
-            document.getElementById("appScreen").classList.remove("hidden-view");
-            
-            if(localStorage.getItem("app_role") === "admin") {
-                document.getElementById("adminBtn").classList.remove("hidden-view");
-            }
+      <!-- Settings -->
+      <div id="tab-settings" class="space-y-3 hidden-view">
+        <p class="text-xs text-gray-500">ค่าเริ่มต้นที่ผู้ใช้ทุกคนจะเห็นตอนเปิดโปรแกรม</p>
+        <div class="grid grid-cols-2 gap-3" id="settingsGrid"></div>
+        <button onclick="saveAdminSettings()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-bold">บันทึกการตั้งค่า</button>
+      </div>
 
-            try {
-                const res = await fetch("/api/settings", { headers: { "Authorization": `Bearer ${token}` } });
-                if(res.ok) {
-                    const settings = await res.json();
-                    document.getElementById('engineSelect').value = settings.default_engine;
-                    document.getElementById('voiceSelect').value = settings.default_voice;
-                    document.getElementById('rateSelect').value = settings.default_rate;
-                    document.getElementById('pitchSelect').value = settings.default_pitch;
-                    document.getElementById('formatSelect').value = settings.default_format;
-                } else if(res.status === 401) { logout(); }
-            } catch(e) {}
-        }
+      <!-- System -->
+      <div id="tab-system" class="space-y-3 hidden-view text-sm">
+        <div id="systemBox">กำลังโหลด...</div>
+        <button onclick="loadSystem()" class="text-xs border px-3 py-1 rounded-lg">รีเฟรช</button>
+      </div>
+    </div>
+  </div>
+</div>
 
-        document.getElementById('textInput').addEventListener('keyup', () => {
-            clearTimeout(typingTimer);
-            if (document.getElementById('textInput').value.trim() && document.getElementById('realtimeToggle').checked) {
-                typingTimer = setTimeout(translateAndSpeak, doneTypingInterval);
-            }
-        });
-        document.getElementById('textInput').addEventListener('keydown', () => { clearTimeout(typingTimer); });
-        function triggerTranslate() { if(document.getElementById('textInput').value.trim() && document.getElementById('realtimeToggle').checked) translateAndSpeak(); }
+<script>
+// ---------- helpers ----------
+const $ = id => document.getElementById(id);
+const S = { token: null, role: null, username: null, lastAudioId: null, lastThai: "", phrases: [], reqSeq: 0 };
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function store(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch(e) {} }
+function load(k) { try { return localStorage.getItem(k); } catch(e) { return null; } }
+function toast(msg, type = "info", ms = 3500) {
+  const colors = { info: "bg-gray-800", ok: "bg-green-600", err: "bg-red-600", warn: "bg-amber-500" };
+  const d = document.createElement("div");
+  d.className = `toast pointer-events-auto ${colors[type]} text-white text-sm px-4 py-2 rounded-lg shadow-lg max-w-sm`;
+  d.textContent = msg; $("toasts").appendChild(d); setTimeout(() => d.remove(), ms);
+}
+function fmtTime(t) { if (!t) return "-"; try { return new Date(t).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" }); } catch(e) { return t; } }
+function closeModal(id) { $(id).classList.add("hidden-view"); }
+function openModal(id) { $(id).classList.remove("hidden-view"); }
 
-        function updateDownloadLink(event) {
-            const format = document.getElementById('formatSelect').value;
-            const btn = document.getElementById('downloadBtn');
-            if(btn.href && btn.href.includes('/download?fmt=')) {
-                btn.href = btn.href.split('?')[0] + '?fmt=' + format;
-                btn.download = `burmese_audio.${format}`;
-            }
-        }
+// fetch wrapper: token, timeout, cold-start retry, friendly errors
+async function api(path, { method = "GET", form = null, timeout = 90000, auth = true, retry = 1 } = {}) {
+  let body;
+  if (form) { body = new FormData(); for (const [k, v] of Object.entries(form)) body.append(k, v); }
+  const headers = {};
+  if (auth && S.token) headers["Authorization"] = "Bearer " + S.token;
+  for (let attempt = 0; attempt <= retry; attempt++) {
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), timeout);
+    let res;
+    try { res = await fetch(path, { method, body, headers, signal: ctrl.signal }); }
+    catch (e) {
+      clearTimeout(t);
+      if (attempt < retry) { showBanner("กำลังเชื่อมต่อเซิร์ฟเวอร์... (Render ฟรีอาจใช้เวลาตื่น 30–60 วินาที)", "warn"); await new Promise(r => setTimeout(r, 4000)); continue; }
+      throw new Error(e.name === "AbortError" ? "เซิร์ฟเวอร์ตอบช้าเกินไป กรุณาลองใหม่" : "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ตรวจสอบอินเทอร์เน็ต");
+    }
+    clearTimeout(t);
+    if ((res.status === 502 || res.status === 503 && !res.headers.get("content-type")?.includes("json")) && attempt < retry) {
+      showBanner("เซิร์ฟเวอร์กำลังเริ่มทำงาน... กรุณารอสักครู่", "warn"); await new Promise(r => setTimeout(r, 5000)); continue;
+    }
+    hideBanner();
+    let data = null;
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("json")) { try { data = await res.json(); } catch(e) {} }
+    if (res.status === 401 && auth) { toast((data && data.detail) || "กรุณาเข้าสู่ระบบใหม่", "warn"); logout(true); throw new Error("401"); }
+    if (!res.ok) {
+      let msg = data && data.detail;
+      if (Array.isArray(msg)) msg = msg.map(x => x.msg).join(", ");
+      throw new Error(msg || `เกิดข้อผิดพลาด (HTTP ${res.status})`);
+    }
+    return data;
+  }
+}
+function showBanner(text, type) {
+  const b = $("banner"); b.textContent = text;
+  b.className = "fixed top-0 inset-x-0 z-[90] text-center text-sm py-2 px-3 " + (type === "err" ? "bg-red-600 text-white" : "bg-amber-400 text-gray-900");
+}
+function hideBanner() { if (!$("banner").dataset.sticky) $("banner").className = "hidden-view"; }
 
-        async function translateAndSpeak() {
-            const token = localStorage.getItem("app_token");
-            if(!token) { logout(); return; }
+// ---------- boot ----------
+window.addEventListener("load", async () => {
+  S.token = load("app_token"); S.role = load("app_role"); S.username = load("app_user");
+  checkServer();
+  if (S.token) showApp(); else openModal("loginScreen");
+});
 
-            const text = document.getElementById('textInput').value.trim();
-            if(!text) return; 
+async function checkServer() {
+  try {
+    const h = await api("/healthz", { auth: false, retry: 2, timeout: 70000 });
+    const st = $("dbState");
+    if (!h.db_configured) {
+      $("banner").dataset.sticky = "1";
+      showBanner("⚠ เซิร์ฟเวอร์ยังไม่ได้ตั้งค่า DATABASE_URL — ไม่สามารถบันทึกผู้ใช้ได้ (ดู README)", "err");
+      st.textContent = "ฐานข้อมูล: ยังไม่ตั้งค่า";
+    } else if (!h.db_ok) {
+      $("banner").dataset.sticky = "1";
+      showBanner("⚠ เชื่อมต่อฐานข้อมูลไม่ได้ — ตรวจสอบ Supabase (อาจถูก Pause) หรือ DATABASE_URL", "err");
+      st.textContent = "ฐานข้อมูล: เชื่อมต่อไม่ได้";
+    } else {
+      st.textContent = "ฐานข้อมูล: " + (h.db_kind === "supabase" ? "Supabase ✓" : h.db_kind);
+    }
+  } catch (e) {}
+}
 
-            document.getElementById('resultBox').classList.add('hidden-view');
-            document.getElementById('loadingDiv').classList.remove('hidden-view');
-            document.getElementById('speakBtn').disabled = true; 
+async function login() {
+  const btn = $("loginBtn"), err = $("loginError");
+  btn.disabled = true; btn.textContent = "กำลังตรวจสอบ..."; err.classList.add("hidden-view");
+  try {
+    const d = await api("/login", { method: "POST", auth: false, form: { username: $("username").value.trim(), password: $("password").value }, retry: 2 });
+    S.token = d.access_token; S.role = d.role; S.username = d.username;
+    store("app_token", S.token); store("app_role", S.role); store("app_user", S.username);
+    $("password").value = "";
+    closeModal("loginScreen"); await showApp();
+    if (d.must_change_password) openPwModal(true);
+  } catch (e) {
+    if (e.message !== "401") { err.textContent = e.message; err.classList.remove("hidden-view"); }
+  } finally { btn.disabled = false; btn.textContent = "เข้าสู่ระบบ"; }
+}
 
-            try {
-                const fd = new FormData();
-                fd.append("text", text);
-                fd.append("rate", document.getElementById('rateSelect').value);
-                fd.append("pitch", document.getElementById('pitchSelect').value);
-                fd.append("voice", document.getElementById('voiceSelect').value);
-                fd.append("audio_format", document.getElementById('formatSelect').value);
-                fd.append("engine", document.getElementById('engineSelect').value);
+function logout(silent) {
+  store("app_token", null); store("app_role", null); store("app_user", null);
+  S.token = S.role = S.username = null;
+  closeModal("appScreen"); ["adminModal", "historyModal", "pwModal"].forEach(closeModal);
+  openModal("loginScreen");
+}
 
-                const res = await fetch("/process", { 
-                    method: "POST", 
-                    body: fd,
-                    headers: { "Authorization": `Bearer ${token}` }
-                });
-                
-                if(res.status === 401) { alert("Session หมดอายุ กรุณาล็อกอินใหม่"); logout(); return; }
-                
-                const data = await res.json();
-                if(data.error) { alert(data.error); return; }
+async function showApp() {
+  closeModal("loginScreen"); openModal("appScreen");
+  $("whoami").textContent = S.username || "";
+  const isAdmin = S.role === "admin";
+  ["adminBtn", "saveCorrectionBtn", "saveAsPhraseBtn", "histAllBox"].forEach(id => $(id).classList.toggle("hidden-view", !isAdmin));
+  try {
+    const me = await api("/api/me");
+    S.role = me.role; store("app_role", S.role);
+    ["adminBtn", "saveCorrectionBtn", "saveAsPhraseBtn", "histAllBox"].forEach(id => $(id).classList.toggle("hidden-view", me.role !== "admin"));
+    if (me.must_change_password) openPwModal(true);
+    const st = await api("/api/settings");
+    applyUserPrefs(st);
+    await loadPhrases();
+  } catch (e) { if (e.message !== "401") toast(e.message, "err"); }
+}
 
-                document.getElementById('resultText').innerText = data.burmese_text;
-                document.getElementById('engineBadge').innerText = "via " + data.engine_used;
-                document.getElementById('audioPlayer').src = data.play_url + "&t=" + new Date().getTime();
-                
-                const btn = document.getElementById('downloadBtn');
-                btn.href = data.download_url;
-                btn.download = `burmese_audio.${document.getElementById('formatSelect').value}`;
-                
-                document.getElementById('loadingDiv').classList.add('hidden-view');
-                document.getElementById('resultBox').classList.remove('hidden-view');
-                document.getElementById('audioPlayer').play().catch(e=>{});
-            } catch (error) { alert("เกิดข้อผิดพลาดเครือข่าย"); } finally {
-                document.getElementById('speakBtn').disabled = false;
-                document.getElementById('loadingDiv').classList.add('hidden-view');
-            }
-        }
+// user's own last choices (per browser) override admin defaults
+const PREF_IDS = { engineSelect: "default_engine", voiceSelect: "default_voice", rateSelect: "default_rate", pitchSelect: "default_pitch",
+  formatSelect: "default_format", langModeSelect: "default_lang_mode", thaiVoiceSelect: "default_thai_voice", repeatSelect: "default_repeat" };
+function applyUserPrefs(defaults) {
+  let mine = {}; try { mine = JSON.parse(load("app_prefs_" + S.username) || "{}"); } catch(e) {}
+  for (const [id, key] of Object.entries(PREF_IDS)) {
+    const el = $(id), v = mine[id] ?? defaults[key];
+    if (v !== undefined && [...el.options].some(o => o.value === v)) el.value = v;
+  }
+  toggleThaiVoice();
+}
+function saveUserPrefs() {
+  const p = {}; for (const id of Object.keys(PREF_IDS)) p[id] = $(id).value;
+  store("app_prefs_" + S.username, JSON.stringify(p));
+}
+Object.keys(PREF_IDS).forEach(id => $(id).addEventListener("change", saveUserPrefs));
+function toggleThaiVoice() { $("thaiVoiceBox").classList.toggle("opacity-40", $("langModeSelect").value === "my"); }
 
-        // --- ADMIN SETTINGS & USERS ---
-        function switchAdminTab(tab) {
-            if(tab === 'settings') {
-                document.getElementById('tabSettings').classList.remove('hidden-view');
-                document.getElementById('tabUsers').classList.add('hidden-view');
-                document.getElementById('tabSettingsBtn').className = "flex-1 py-2 font-bold text-indigo-600 border-b-2 border-indigo-600";
-                document.getElementById('tabUsersBtn').className = "flex-1 py-2 font-bold text-gray-500 hover:text-indigo-600";
-            } else {
-                document.getElementById('tabSettings').classList.add('hidden-view');
-                document.getElementById('tabUsers').classList.remove('hidden-view');
-                document.getElementById('tabSettingsBtn').className = "flex-1 py-2 font-bold text-gray-500 hover:text-indigo-600";
-                document.getElementById('tabUsersBtn').className = "flex-1 py-2 font-bold text-indigo-600 border-b-2 border-indigo-600";
-                loadUsers();
-            }
-        }
+// ---------- typing / realtime ----------
+let typingTimer;
+$("textInput").addEventListener("input", () => {
+  $("charCount").textContent = $("textInput").value.length + " / 3000";
+  clearTimeout(typingTimer);
+  if ($("textInput").value.trim() && $("realtimeToggle").checked) typingTimer = setTimeout(translateAndSpeak, 2000);
+});
+$("textInput").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); translateAndSpeak(); } });
+function triggerTranslate() { if ($("textInput").value.trim() && $("realtimeToggle").checked) translateAndSpeak(); }
+function clearText() { $("textInput").value = ""; $("charCount").textContent = "0"; $("textInput").focus(); }
 
-        function openAdmin() {
-            document.getElementById("setEngine").value = document.getElementById('engineSelect').value;
-            document.getElementById("setVoice").value = document.getElementById('voiceSelect').value;
-            document.getElementById("setPitch").value = document.getElementById('pitchSelect').value;
-            document.getElementById("setRate").value = document.getElementById('rateSelect').value;
-            document.getElementById("setFormat").value = document.getElementById('formatSelect').value;
-            switchAdminTab('settings');
-            document.getElementById("adminModal").classList.remove("hidden-view");
-        }
-        function closeAdmin() { document.getElementById("adminModal").classList.add("hidden-view"); }
-        
-        async function saveAdminSettings() {
-            const token = localStorage.getItem("app_token");
-            const fd = new FormData();
-            fd.append("default_engine", document.getElementById("setEngine").value);
-            fd.append("default_voice", document.getElementById("setVoice").value);
-            fd.append("default_pitch", document.getElementById("setPitch").value);
-            fd.append("default_rate", document.getElementById("setRate").value);
-            fd.append("default_format", document.getElementById("setFormat").value);
+function speechOpts() {
+  return { rate: $("rateSelect").value, pitch: $("pitchSelect").value, voice: $("voiceSelect").value,
+    audio_format: $("formatSelect").value, lang_mode: $("langModeSelect").value, thai_voice: $("thaiVoiceSelect").value };
+}
+function setBusy(on, text) {
+  $("speakBtn").disabled = on;
+  $("loadingText").textContent = text || "กำลังประมวลผล...";
+  $("loadingDiv").classList.toggle("hidden-view", !on);
+}
 
-            try {
-                const res = await fetch("/api/settings", {
-                    method: "POST", body: fd, headers: { "Authorization": `Bearer ${token}` }
-                });
-                if(res.ok) {
-                    alert("บันทึกการตั้งค่าสำเร็จ! ผู้ใช้ใหม่จะเห็นค่าเริ่มต้นนี้");
-                    closeAdmin();
-                    loadSettingsAndShowApp(token);
-                } else { alert("เกิดข้อผิดพลาดในการบันทึก"); }
-            } catch(e) { alert("เชื่อมต่อล้มเหลว"); }
-        }
+async function translateAndSpeak(fresh = false) {
+  const text = $("textInput").value.trim();
+  if (!text) { toast("กรุณาพิมพ์ข้อความ", "warn"); return; }
+  const seq = ++S.reqSeq;
+  setBusy(true, "กำลังแปลและสร้างเสียง...");
+  try {
+    const d = await api("/process", { method: "POST", form: { text, engine: $("engineSelect").value, fresh: fresh ? "true" : "false", ...speechOpts() } });
+    if (seq !== S.reqSeq) return; // a newer request superseded this one
+    S.lastThai = text; showResult(d);
+  } catch (e) { if (e.message !== "401" && seq === S.reqSeq) toast(e.message, "err", 6000); }
+  finally { if (seq === S.reqSeq) setBusy(false); }
+}
 
-        async function loadUsers() {
-            const token = localStorage.getItem("app_token");
-            try {
-                const res = await fetch("/api/users", { headers: { "Authorization": `Bearer ${token}` } });
-                if(res.ok) {
-                    const users = await res.json();
-                    const tbody = document.getElementById('usersListTable');
-                    tbody.innerHTML = "";
-                    users.forEach(u => {
-                        const tr = document.createElement('tr');
-                        tr.className = "border-t";
-                        const roleLabel = u.role === 'admin' ? '<span class="text-xs text-red-500 font-bold">Admin</span>' : '<span class="text-xs text-blue-500 font-bold">User</span>';
-                        tr.innerHTML = `
-                            <td class="p-2">${u.username}</td>
-                            <td class="p-2">${roleLabel}</td>
-                            <td class="p-2 text-right">
-                                ${u.username !== 'admin' ? `<button onclick="deleteUser(${u.id})" class="text-red-500 hover:text-red-700 text-xs font-bold px-2 py-1 bg-red-50 rounded">ลบ</button>` : ''}
-                            </td>
-                        `;
-                        tbody.appendChild(tr);
-                    });
-                }
-            } catch(e) {}
-        }
+async function speakEdited(saveCorrection) {
+  const my = $("resultText").value.trim();
+  if (!my) return;
+  if (saveCorrection && !confirm("บันทึกคำแปลนี้เป็นคำแปลถาวรสำหรับข้อความไทยนี้?")) return;
+  const seq = ++S.reqSeq; setBusy(true, "กำลังสร้างเสียง...");
+  try {
+    const d = await api("/api/tts", { method: "POST", form: { burmese_text: my, thai_text: S.lastThai, save_correction: saveCorrection ? "true" : "false", ...speechOpts() } });
+    if (seq !== S.reqSeq) return;
+    showResult(d); if (saveCorrection) toast("บันทึกคำแปลแล้ว", "ok");
+  } catch (e) { if (e.message !== "401") toast(e.message, "err", 6000); }
+  finally { if (seq === S.reqSeq) setBusy(false); }
+}
 
-        async function createUser() {
-            const token = localStorage.getItem("app_token");
-            const u = document.getElementById("newUsername").value.trim();
-            const p = document.getElementById("newPassword").value.trim();
-            const r = document.getElementById("newRole").value;
-            if(!u || !p) { alert("กรุณากรอกชื่อผู้ใช้และรหัสผ่าน"); return; }
-            
-            const fd = new FormData();
-            fd.append("username", u); fd.append("password", p); fd.append("role", r);
-            
-            try {
-                const res = await fetch("/api/users", {
-                    method: "POST", body: fd, headers: { "Authorization": `Bearer ${token}` }
-                });
-                if(res.ok) {
-                    document.getElementById("newUsername").value = "";
-                    document.getElementById("newPassword").value = "";
-                    loadUsers();
-                } else {
-                    const data = await res.json();
-                    alert(data.detail || "ไม่สามารถเพิ่มผู้ใช้ได้");
-                }
-            } catch(e) { alert("เกิดข้อผิดพลาด"); }
-        }
+function showResult(d) {
+  $("resultText").value = d.burmese_text;
+  $("engineBadge").textContent = "via " + d.engine_used;
+  S.lastAudioId = d.audio_id;
+  const p = $("audioPlayer");
+  p.dataset.left = String(Math.max(1, parseInt($("repeatSelect").value) || 1) - 1);
+  p.src = d.play_url;
+  $("resultBox").classList.remove("hidden-view");
+  p.play().catch(() => toast("กดปุ่ม ▶ เพื่อเล่นเสียง (เบราว์เซอร์บล็อกการเล่นอัตโนมัติ)", "info"));
+}
+$("audioPlayer").addEventListener("ended", e => {
+  const p = e.target, left = parseInt(p.dataset.left || "0");
+  if (left > 0) { p.dataset.left = String(left - 1); setTimeout(() => { p.currentTime = 0; p.play().catch(() => {}); }, 700); }
+});
+$("audioPlayer").addEventListener("error", () => { if (S.lastAudioId) toast("ไฟล์เสียงหมดอายุหรือโหลดไม่ได้ กรุณากดสร้างเสียงใหม่", "warn"); });
 
-        async function deleteUser(id) {
-            if(!confirm("ยืนยันการลบบัญชีผู้ใช้นี้?")) return;
-            const token = localStorage.getItem("app_token");
-            try {
-                const res = await fetch(`/api/users/${id}`, {
-                    method: "DELETE", headers: { "Authorization": `Bearer ${token}` }
-                });
-                if(res.ok) {
-                    loadUsers();
-                } else {
-                    const data = await res.json();
-                    alert(data.detail || "ลบผู้ใช้งานไม่สำเร็จ");
-                }
-            } catch(e) {}
-        }
-    </script>
+function downloadAudio() {
+  if (!S.lastAudioId) return;
+  const a = document.createElement("a");
+  a.href = `/download/${S.lastAudioId}?fmt=${$("formatSelect").value}`; a.download = "";
+  document.body.appendChild(a); a.click(); a.remove();
+}
+async function copyResult() {
+  try { await navigator.clipboard.writeText($("resultText").value); toast("คัดลอกแล้ว", "ok", 1500); }
+  catch(e) { $("resultText").select(); document.execCommand("copy"); }
+}
+
+// ---------- phrases ----------
+async function loadPhrases() {
+  try { S.phrases = await api("/api/phrases"); } catch (e) { S.phrases = []; }
+  const cats = [...new Set(S.phrases.map(p => p.category))];
+  const sel = $("phraseCat"), cur = sel.value;
+  sel.innerHTML = '<option value="">ทุกหมวด</option>' + cats.map(c => `<option>${esc(c)}</option>`).join("");
+  if (cats.includes(cur)) sel.value = cur;
+  $("catList").innerHTML = cats.map(c => `<option value="${esc(c)}">`).join("");
+  $("phrasesCard").classList.toggle("hidden-view", S.phrases.length === 0);
+  renderPhraseChips();
+}
+function renderPhraseChips() {
+  const cat = $("phraseCat").value, box = $("phraseChips"); box.innerHTML = "";
+  S.phrases.filter(p => !cat || p.category === cat).forEach(p => {
+    const b = document.createElement("button");
+    b.className = "chip text-xs bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-800 px-3 py-1.5 rounded-full text-left";
+    b.textContent = p.thai_text.length > 40 ? p.thai_text.slice(0, 40) + "…" : p.thai_text;
+    b.title = p.thai_text;
+    let clickTimer;
+    b.onclick = () => { clearTimeout(clickTimer); clickTimer = setTimeout(() => usePhrase(p, false), 250); };
+    b.ondblclick = () => { clearTimeout(clickTimer); usePhrase(p, true); };
+    box.appendChild(b);
+  });
+}
+async function usePhrase(p, speakNow) {
+  $("textInput").value = p.thai_text; $("charCount").textContent = p.thai_text.length + " / 3000";
+  if (!speakNow) return;
+  if (p.burmese_text) {
+    S.lastThai = p.thai_text; $("resultText").value = p.burmese_text;
+    const seq = ++S.reqSeq; setBusy(true, "กำลังสร้างเสียง...");
+    try { const d = await api("/api/tts", { method: "POST", form: { burmese_text: p.burmese_text, thai_text: p.thai_text, ...speechOpts() } }); if (seq === S.reqSeq) showResult(d); }
+    catch (e) { if (e.message !== "401") toast(e.message, "err"); }
+    finally { if (seq === S.reqSeq) setBusy(false); }
+  } else translateAndSpeak();
+}
+async function saveAsPhrase() {
+  const th = S.lastThai, my = $("resultText").value.trim();
+  if (!th) return;
+  const cat = prompt("หมวดหมู่ของข้อความนี้:", "ทั่วไป"); if (cat === null) return;
+  try { await api("/api/phrases", { method: "POST", form: { category: cat, thai_text: th, burmese_text: my } }); toast("เพิ่มข้อความสำเร็จรูปแล้ว", "ok"); loadPhrases(); }
+  catch (e) { toast(e.message, "err"); }
+}
+
+// ---------- history ----------
+function openHistory() { openModal("historyModal"); loadHistory(); }
+async function loadHistory() {
+  const box = $("historyList"); box.innerHTML = '<p class="text-gray-400 text-center py-4"><span class="spinner"></span></p>';
+  try {
+    const rows = await api("/api/history?limit=100" + ($("histAll").checked ? "&all_users=true" : ""));
+    box.innerHTML = rows.length ? "" : '<p class="text-gray-400 text-center py-6">ยังไม่มีประวัติ</p>';
+    rows.forEach(r => {
+      const d = document.createElement("div"); d.className = "border rounded-lg p-2 hover:bg-gray-50";
+      d.innerHTML = `<div class="flex justify-between text-[11px] text-gray-400"><span>${esc(fmtTime(r.created_at))}${$("histAll").checked ? " · " + esc(r.username) : ""}</span><span>${esc(r.engine || "")}</span></div>
+        <div class="text-gray-800">${esc(r.thai_text)}</div><div class="my-text text-green-800">${esc(r.burmese_text)}</div>
+        <div class="flex gap-2 mt-1 text-xs"><button class="replay text-blue-600 hover:underline">▶ เล่นอีกครั้ง</button><button class="reuse text-gray-500 hover:underline">ใช้ข้อความนี้</button></div>`;
+      d.querySelector(".replay").onclick = () => { closeModal("historyModal"); usePhrase({ thai_text: r.thai_text, burmese_text: r.burmese_text }, true); };
+      d.querySelector(".reuse").onclick = () => { closeModal("historyModal"); usePhrase({ thai_text: r.thai_text }, false); };
+      box.appendChild(d);
+    });
+  } catch (e) { box.innerHTML = `<p class="text-red-500 text-center py-4">${esc(e.message)}</p>`; }
+}
+async function clearHistory() {
+  if (!confirm("ล้างประวัติของคุณทั้งหมด?")) return;
+  try { await api("/api/history", { method: "DELETE" }); loadHistory(); } catch (e) { toast(e.message, "err"); }
+}
+
+// ---------- password ----------
+function openPwModal(force) {
+  ["pwOld", "pwNew", "pwNew2"].forEach(id => $(id).value = "");
+  $("pwForceMsg").classList.toggle("hidden-view", !force);
+  $("pwCancel").classList.toggle("hidden-view", !!force);
+  openModal("pwModal");
+}
+async function changePassword() {
+  if ($("pwNew").value !== $("pwNew2").value) { toast("รหัสผ่านใหม่ไม่ตรงกัน", "err"); return; }
+  try {
+    const d = await api("/api/me/password", { method: "POST", form: { old_password: $("pwOld").value, new_password: $("pwNew").value } });
+    S.token = d.access_token; store("app_token", S.token);
+    closeModal("pwModal"); toast("เปลี่ยนรหัสผ่านเรียบร้อย", "ok");
+  } catch (e) { if (e.message !== "401") toast(e.message, "err"); }
+}
+
+// ---------- admin ----------
+document.querySelectorAll("#adminTabs button").forEach(b => b.onclick = () => switchAdminTab(b.dataset.tab));
+function switchAdminTab(tab) {
+  document.querySelectorAll("#adminTabs button").forEach(b => {
+    const on = b.dataset.tab === tab;
+    b.className = "flex-1 py-2 px-3 font-bold whitespace-nowrap " + (on ? "text-indigo-600 border-b-2 border-indigo-600" : "text-gray-500 hover:text-indigo-600");
+  });
+  ["users", "phrases", "settings", "system"].forEach(t => $("tab-" + t).classList.toggle("hidden-view", t !== tab));
+  ({ users: loadUsers, phrases: renderPhraseAdmin, settings: loadSettingsForm, system: loadSystem })[tab]();
+}
+function openAdmin() { openModal("adminModal"); switchAdminTab("users"); }
+
+async function loadUsers() {
+  const tb = $("usersTable"); tb.innerHTML = '<tr><td colspan="5" class="p-3 text-center"><span class="spinner"></span></td></tr>';
+  try {
+    const users = await api("/api/users"); tb.innerHTML = "";
+    users.forEach(u => {
+      const tr = document.createElement("tr"); tr.className = "border-t align-middle";
+      const self = u.username === S.username;
+      tr.innerHTML = `<td class="p-2"><div class="font-medium name"></div><div class="text-[11px] text-gray-400 disp"></div></td>
+        <td class="p-2"><select class="inp role" style="width:auto;padding:2px 4px" ${self ? "disabled" : ""}><option value="user">User</option><option value="admin">Admin</option></select></td>
+        <td class="p-2"><span class="text-xs font-bold ${u.is_active ? "text-green-600" : "text-gray-400"}">${u.is_active ? "ใช้งาน" : "ปิดใช้งาน"}</span>${u.must_change_password ? '<div class="text-[10px] text-amber-600">รอเปลี่ยนรหัส</div>' : ""}</td>
+        <td class="p-2 text-xs text-gray-500 hidden sm:table-cell">${esc(fmtTime(u.last_login))}</td>
+        <td class="p-2 text-right whitespace-nowrap space-x-1">
+          <button class="reset text-xs px-2 py-1 bg-amber-50 text-amber-700 rounded">รีเซ็ตรหัส</button>
+          ${self ? "" : `<button class="toggle text-xs px-2 py-1 bg-gray-100 rounded">${u.is_active ? "ปิด" : "เปิด"}</button>
+          <button class="del text-xs px-2 py-1 bg-red-50 text-red-600 rounded">ลบ</button>`}
+        </td>`;
+      tr.querySelector(".name").textContent = u.username + (self ? " (คุณ)" : "");
+      tr.querySelector(".disp").textContent = u.display_name || "";
+      const rs = tr.querySelector(".role"); rs.value = u.role;
+      rs.onchange = () => patchUser(u.id, { role: rs.value }, `เปลี่ยนสิทธิ์ ${u.username} แล้ว`);
+      tr.querySelector(".reset").onclick = () => {
+        const pw = prompt(`ตั้งรหัสผ่านใหม่ให้ ${u.username} (≥4 ตัว) — ผู้ใช้จะถูกบังคับเปลี่ยนเมื่อล็อกอินครั้งถัดไป`);
+        if (pw) patchUser(u.id, { new_password: pw }, "รีเซ็ตรหัสผ่านแล้ว");
+      };
+      const tg = tr.querySelector(".toggle"); if (tg) tg.onclick = () => patchUser(u.id, { is_active: u.is_active ? "false" : "true" }, "อัปเดตสถานะแล้ว");
+      const dl = tr.querySelector(".del"); if (dl) dl.onclick = () => deleteUser(u);
+      tb.appendChild(tr);
+    });
+  } catch (e) { tb.innerHTML = `<tr><td colspan="5" class="p-3 text-red-500">${esc(e.message)}</td></tr>`; }
+}
+async function patchUser(id, form, okMsg) {
+  try { await api(`/api/users/${id}`, { method: "PATCH", form }); toast(okMsg, "ok"); } catch (e) { toast(e.message, "err"); }
+  loadUsers();
+}
+async function createUser() {
+  const form = { username: $("newUsername").value.trim(), password: $("newPassword").value, role: $("newRole").value, display_name: $("newDisplay").value.trim() };
+  try {
+    const d = await api("/api/users", { method: "POST", form });
+    ["newUsername", "newPassword", "newDisplay"].forEach(id => $(id).value = "");
+    toast(`เพิ่ม ${form.username} แล้ว (บันทึกในฐานข้อมูล · รวม ${d.total_users} บัญชี)`, "ok", 5000);
+    loadUsers();
+  } catch (e) { toast(e.message, "err"); }
+}
+async function deleteUser(u) {
+  if (!confirm(`ยืนยันการลบบัญชี "${u.username}"?`)) return;
+  try { await api(`/api/users/${u.id}`, { method: "DELETE" }); toast("ลบแล้ว", "ok"); } catch (e) { toast(e.message, "err"); }
+  loadUsers();
+}
+
+// phrases admin
+function renderPhraseAdmin() {
+  const box = $("phraseAdminList"); box.innerHTML = S.phrases.length ? "" : '<p class="text-gray-400 text-sm text-center py-4">ยังไม่มีข้อความสำเร็จรูป</p>';
+  S.phrases.forEach(p => {
+    const d = document.createElement("div"); d.className = "border rounded-lg p-2 text-sm flex gap-2 justify-between";
+    d.innerHTML = `<div class="min-w-0"><span class="text-[10px] bg-indigo-50 text-indigo-700 px-2 rounded-full"></span>
+      <div class="th"></div><div class="my-text text-green-800 text-xs mt-0.5"></div></div>
+      <div class="shrink-0 flex flex-col gap-1"><button class="ed text-xs px-2 py-1 bg-gray-100 rounded">แก้ไข</button><button class="dl text-xs px-2 py-1 bg-red-50 text-red-600 rounded">ลบ</button></div>`;
+    d.querySelector("span").textContent = p.category;
+    d.querySelector(".th").textContent = p.thai_text;
+    d.querySelector(".my-text").textContent = p.burmese_text || "(แปลอัตโนมัติตอนใช้งาน)";
+    d.querySelector(".ed").onclick = () => {
+      $("phId").value = p.id; $("phCat").value = p.category; $("phOrder").value = p.sort_order;
+      $("phThai").value = p.thai_text; $("phMy").value = p.burmese_text || ""; $("phraseFormTitle").textContent = "แก้ไขข้อความ #" + p.id;
+      $("tab-phrases").parentElement.scrollTop = 0;
+    };
+    d.querySelector(".dl").onclick = async () => {
+      if (!confirm("ลบข้อความนี้?")) return;
+      try { await api(`/api/phrases/${p.id}`, { method: "DELETE" }); await loadPhrases(); renderPhraseAdmin(); } catch (e) { toast(e.message, "err"); }
+    };
+    box.appendChild(d);
+  });
+}
+function resetPhraseForm() { ["phId", "phCat", "phThai", "phMy"].forEach(id => $(id).value = ""); $("phOrder").value = 0; $("phraseFormTitle").textContent = "เพิ่มข้อความสำเร็จรูป"; }
+async function savePhrase() {
+  const id = $("phId").value;
+  const form = { category: $("phCat").value || "ทั่วไป", thai_text: $("phThai").value, burmese_text: $("phMy").value, sort_order: $("phOrder").value || 0 };
+  try {
+    await api(id ? `/api/phrases/${id}` : "/api/phrases", { method: id ? "PUT" : "POST", form });
+    toast("บันทึกแล้ว", "ok"); resetPhraseForm(); await loadPhrases(); renderPhraseAdmin();
+  } catch (e) { toast(e.message, "err"); }
+}
+async function autoTranslatePhrase() {
+  const th = $("phThai").value.trim(); if (!th) return;
+  try { const d = await api("/api/translate", { method: "POST", form: { text: th, engine: "auto" } }); $("phMy").value = d.burmese_text; }
+  catch (e) { toast(e.message, "err"); }
+}
+
+// settings
+const SETTING_FIELDS = [
+  ["default_engine", "Engine เริ่มต้น", "engineSelect"], ["default_voice", "เสียงพม่าเริ่มต้น", "voiceSelect"],
+  ["default_pitch", "โทนเสียงเริ่มต้น", "pitchSelect"], ["default_rate", "ความเร็วเริ่มต้น", "rateSelect"],
+  ["default_format", "ฟอร์แมตเริ่มต้น", "formatSelect"], ["default_lang_mode", "ภาษาที่ประกาศ", "langModeSelect"],
+  ["default_thai_voice", "เสียงภาษาไทย", "thaiVoiceSelect"], ["default_repeat", "เล่นซ้ำ", "repeatSelect"]];
+async function loadSettingsForm() {
+  const g = $("settingsGrid"); g.innerHTML = "";
+  let st = {}; try { st = await api("/api/settings"); } catch (e) { toast(e.message, "err"); }
+  SETTING_FIELDS.forEach(([key, label, src]) => {
+    const w = document.createElement("div");
+    w.innerHTML = `<label class="sel">${esc(label)}</label>`;
+    const s = $(src).cloneNode(true); s.removeAttribute("id"); s.removeAttribute("onchange"); s.dataset.key = key; s.className = "inp";
+    s.value = st[key] ?? s.value; w.appendChild(s); g.appendChild(w);
+  });
+}
+async function saveAdminSettings() {
+  const form = {}; $("settingsGrid").querySelectorAll("select").forEach(s => form[s.dataset.key] = s.value);
+  try { await api("/api/settings", { method: "POST", form }); toast("บันทึกการตั้งค่าแล้ว", "ok"); } catch (e) { toast(e.message, "err"); }
+}
+
+// system status
+async function loadSystem() {
+  const box = $("systemBox"); box.innerHTML = '<span class="spinner"></span>';
+  try {
+    const s = await api("/api/system");
+    const kindLabel = { supabase: "Supabase ✓ (ถาวร)", "render-postgres": "Render PostgreSQL (มีวันหมดอายุ!)", local: "ฐานข้อมูลในเครื่อง", postgres: "PostgreSQL" }[s.db.kind] || s.db.kind;
+    const row = (k, v) => `<tr class="border-t"><td class="p-2 text-gray-500 whitespace-nowrap">${esc(k)}</td><td class="p-2 font-medium break-all">${esc(v ?? "-")}</td></tr>`;
+    box.innerHTML = (s.warnings.length ? `<div class="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-3 mb-3 space-y-1">${s.warnings.map(w => `<div>⚠ ${esc(w)}</div>`).join("")}</div>`
+                                       : `<div class="bg-green-50 border border-green-200 text-green-800 rounded-lg p-3 mb-3">✓ ระบบปกติ — ข้อมูลผู้ใช้ถูกเก็บในฐานข้อมูลถาวร</div>`) +
+      `<table class="w-full border rounded-lg text-sm">${[
+        row("เวอร์ชันโปรแกรม", s.app_version), row("ชนิดฐานข้อมูล", kindLabel), row("Host", s.db.host + (s.db.port ? ":" + s.db.port : "")),
+        row("Database / User", `${s.db.database} / ${s.db.user}`), row("DB Server", s.db_server),
+        row("จำนวนผู้ใช้", s.counts.users), row("ข้อความสำเร็จรูป", s.counts.phrases), row("ประวัติ", s.counts.history), row("คำแปลที่จำไว้", s.counts.translations),
+        row("เซิร์ฟเวอร์เริ่มทำงาน", fmtTime(s.server_started)), row("Render commit", s.render_commit ? s.render_commit.slice(0, 7) : "-")].join("")}</table>
+      <p class="text-[11px] text-gray-400 mt-2">ทดสอบความถาวร: สร้างผู้ใช้ → Manual Deploy/Restart ใน Render → กลับมาดูว่า "จำนวนผู้ใช้" ยังเท่าเดิม และ "เซิร์ฟเวอร์เริ่มทำงาน" เปลี่ยนเวลาใหม่</p>`;
+  } catch (e) { box.innerHTML = `<p class="text-red-500">${esc(e.message)}</p>`; }
+}
+</script>
 </body>
 </html>

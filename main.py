@@ -1,6 +1,12 @@
 """
-Thai -> Burmese Announcer (วุ้นแปลภาษาพม่า) — V14
+Thai -> Burmese Announcer (วุ้นแปลภาษาพม่า) — V18
 FastAPI + PostgreSQL (Supabase) — deploy on Render free tier.
+
+V16: "tight" speaking pace — silences longer than ~0.3 s are shortened so the voice sounds like a
+person talking instead of a slow, drawn-out reading (measured with ffmpeg silencedetect).
+V15: translation goes through translators.py — several FREE providers with automatic
+fallback + cool-down, and a per-line translation cache, so one rate-limited service
+("Too many requests") no longer stops an announcement.
 
 Key principles of V14
 - Data lives ONLY in PostgreSQL (Supabase). There is deliberately NO silent
@@ -30,12 +36,14 @@ from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 import jwt
 import psycopg2
 import psycopg2.pool
-from psycopg2.extras import RealDictCursor
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from psycopg2.extras import RealDictCursor, execute_values
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-APP_VERSION = "14.0"
+import translators as tr
+
+APP_VERSION = "18.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 log = logging.getLogger("announcer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -67,10 +75,15 @@ AUDIO_DIR = os.path.join(tempfile.gettempdir(), "tb_audio")
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
 ALLOWED_ROLES = {"user", "admin"}
-ALLOWED_ENGINES = {"auto", "google", "mymemory"}
+ALLOWED_ENGINES = tr.ENGINE_CHOICES
 ALLOWED_FORMATS = {"mp3": "audio/mpeg", "wav": "audio/wav", "ogg": "audio/ogg"}
-BURMESE_VOICES = {"my-MM-NilarNeural", "my-MM-ThihaNeural"}
-THAI_VOICES = {"th-TH-PremwadeeNeural", "th-TH-NiwatNeural", "th-TH-AcharaNeural"}
+# V15: "google-*" = Google Translate voice (free); my-MM/th-TH = Microsoft Edge neural voices (free).
+# th-TH-AcharaNeural was removed by Microsoft (no longer in the voice list) -> mapped to Premwadee.
+BURMESE_VOICES = {"my-MM-NilarNeural", "my-MM-ThihaNeural", "google-my"}
+THAI_VOICES = {"th-TH-PremwadeeNeural", "th-TH-NiwatNeural", "google-th"}
+LEGACY_VOICES = {"th-TH-AcharaNeural": "th-TH-PremwadeeNeural"}
+VOICE_FALLBACK = {"my-MM-NilarNeural": "google-my", "my-MM-ThihaNeural": "google-my", "google-my": "my-MM-NilarNeural",
+                  "th-TH-PremwadeeNeural": "google-th", "th-TH-NiwatNeural": "google-th", "google-th": "th-TH-PremwadeeNeural"}
 LANG_MODES = {"my", "th_my", "my_th"}  # Burmese only / Thai then Burmese / Burmese then Thai
 RATE_RE = re.compile(r"^[+-]\d{1,3}%$")
 PITCH_RE = re.compile(r"^[+-]\d{1,3}Hz$")
@@ -85,7 +98,9 @@ DEFAULT_SETTINGS = {
     "default_lang_mode": "my",
     "default_thai_voice": "th-TH-PremwadeeNeural",
     "default_repeat": "1",
+    "default_pace": "tight",
 }
+PACE_MODES = {"tight", "original"}  # tight = shorten long pauses (sounds more like a person)
 
 
 def _validate_setting(key: str, value: str) -> bool:
@@ -98,6 +113,7 @@ def _validate_setting(key: str, value: str) -> bool:
         "default_lang_mode": lambda v: v in LANG_MODES,
         "default_thai_voice": lambda v: v in THAI_VOICES,
         "default_repeat": lambda v: v.isdigit() and 1 <= int(v) <= 5,
+        "default_pace": lambda v: v in PACE_MODES,
     }
     return key in checks and checks[key](value)
 
@@ -159,30 +175,65 @@ _db_ready = False
 _db_last_error: Optional[str] = None
 
 
+def placeholder_db_url(url: Optional[str]) -> Optional[str]:
+    """Return a Thai explanation if the URL is still the example/template value, else None."""
+    u = (url or "").upper()
+    if "YOUR-PASSWORD" in u or "YOUR_PASSWORD" in u or "%5BYOUR" in u:
+        return "DATABASE_URL ยังมีคำว่า YOUR_PASSWORD — ต้องแทนด้วยรหัสผ่านจริงของฐานข้อมูล Supabase"
+    if "XXXXXXXX" in u:
+        return "DATABASE_URL ยังเป็นค่าตัวอย่าง (postgres.xxxxxxxx) — คัดลอก connection string จริงจาก Supabase → Connect → Session pooler"
+    return None
+
+
+def explain_db_error(err) -> str:
+    """Turn a psycopg2/Supabase connection error into a Thai cause + fix."""
+    m = str(err).lower()
+    if "tenant" in m and "not found" in m:
+        return ("Supabase หาโปรเจกต์ไม่เจอ — ชื่อผู้ใช้ในลิงก์ (postgres.<รหัสโปรเจกต์>) ผิด/ยังเป็นค่าตัวอย่าง "
+                "หรือโปรเจกต์ถูก Pause: คัดลอกลิงก์ใหม่จาก Supabase → Connect → Session pooler")
+    if "password authentication failed" in m:
+        return "รหัสผ่านฐานข้อมูลผิด — Supabase → Project Settings → Database → Reset database password แล้วใส่รหัสใหม่"
+    if "could not translate host" in m or "getaddrinfo" in m or "name or service not known" in m or "nodename nor servname" in m:
+        return "หาเซิร์ฟเวอร์ฐานข้อมูลไม่เจอ — ตรวจตัวสะกด host ในลิงก์ หรืออินเทอร์เน็ต"
+    if "network is unreachable" in m or ("db." in m and "supabase.co" in m):
+        return "ใช้ Direct connection (IPv6) ไม่ได้ — เปลี่ยนเป็น Session pooler (host ลงท้าย pooler.supabase.com)"
+    if "timeout" in m or "timed out" in m or "connection refused" in m:
+        return ("เชื่อมต่อไม่ทัน/ถูกปฏิเสธ — Firewall หรือเน็ตบริษัทอาจบล็อกพอร์ต 5432: "
+                "ลองพอร์ต 6543 (Transaction pooler) หรือทดสอบผ่าน hotspot มือถือ")
+    if "too many" in m and "connection" in m or "max client" in m:
+        return "การเชื่อมต่อฐานข้อมูลเต็ม — รอสักครู่แล้วลองใหม่ (หรือปิดโปรแกรมที่ค้างอยู่)"
+    if "ssl" in m:
+        return "ปัญหา SSL — ตรวจว่าลิงก์ไม่ได้ตั้ง sslmode=disable"
+    return "เชื่อมต่อฐานข้อมูลไม่ได้ — ตรวจ DATABASE_URL / Supabase ถูก Pause หรือไม่"
+
+
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool, _db_last_error
     if not DATABASE_URL:
         raise DBUnavailable("ยังไม่ได้ตั้งค่า DATABASE_URL — ระบบจะไม่บันทึกข้อมูลใด ๆ จนกว่าจะตั้งค่า")
-    if "YOUR-PASSWORD" in DATABASE_URL.upper():
-        raise DBUnavailable("DATABASE_URL ยังมีคำว่า [YOUR-PASSWORD] อยู่ — ต้องแทนที่ด้วยรหัสผ่านจริงของ Supabase")
+    ph = placeholder_db_url(DATABASE_URL)
+    if ph:
+        raise DBUnavailable(ph)
     if _pool is None:
         with _pool_lock:
             if _pool is None:
                 try:
                     _pool = psycopg2.pool.ThreadedConnectionPool(1, 8, DATABASE_URL, cursor_factory=RealDictCursor)
                 except Exception as e:
-                    _db_last_error = "เชื่อมต่อฐานข้อมูลไม่ได้: " + str(e).strip()[:200]
-                    log.error("DB connect failed: %s", e)
-                    raise DBUnavailable("เชื่อมต่อฐานข้อมูลไม่ได้ (ตรวจสอบ DATABASE_URL / Supabase ถูก Pause หรือไม่)")
+                    _db_last_error = explain_db_error(e)
+                    log.error("DB connect failed: %s", str(e).strip()[:300])
+                    raise DBUnavailable(_db_last_error)
     return _pool
 
 
 _sem = threading.BoundedSemaphore(8)  # never ask the pool for more than it has
 
 
-def with_db(fn: Callable):
+def with_db(fn: Callable, autocommit: bool = False):
     """Run fn(cursor) inside a transaction. Retries once on a dropped connection
-    (Supabase pooler closes idle connections; Render free sleeps)."""
+    (Supabase pooler closes idle connections; Render free sleeps).
+    autocommit=True is for ONE-statement work (a read, or a single INSERT/UPDATE): it skips the
+    separate COMMIT round-trip — each round-trip to Supabase costs ~100 ms from an office network."""
     global _db_last_error
     for attempt in (1, 2):
         pool = _get_pool()
@@ -192,9 +243,18 @@ def with_db(fn: Callable):
                 conn = pool.getconn()
                 if conn.closed:
                     raise psycopg2.InterfaceError("connection already closed")
-                with conn.cursor() as cur:
-                    result = fn(cur)
-                conn.commit()
+                if autocommit:
+                    conn.autocommit = True
+                    try:
+                        with conn.cursor() as cur:
+                            result = fn(cur)
+                    finally:
+                        if not conn.closed:
+                            conn.autocommit = False
+                else:
+                    with conn.cursor() as cur:
+                        result = fn(cur)
+                    conn.commit()
                 pool.putconn(conn)
                 return result
             except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
@@ -382,7 +442,7 @@ def current_user(request: Request) -> dict:
     # and role changes take effect immediately.
     row = with_db(lambda c: (c.execute(
         "SELECT id, username, role, is_active, token_version, must_change_password FROM users WHERE id=%s",
-        (payload.get("uid"),)), c.fetchone())[1])
+        (payload.get("uid"),)), c.fetchone())[1], autocommit=True)
     if not row or not row["is_active"] or row["token_version"] != payload.get("tv") or row["username"] != payload.get("sub"):
         raise HTTPException(401, "บัญชีนี้ถูกเปลี่ยนแปลงหรือปิดใช้งาน กรุณาเข้าสู่ระบบใหม่")
     return dict(row)
@@ -424,48 +484,34 @@ def text_hash(t: str) -> str:
     return hashlib.sha256(t.encode()).hexdigest()
 
 
-def _chunks(text: str, limit: int):
-    """Split text into pieces <= limit chars on line / space boundaries."""
-    out = []
-    for line in text.split("\n"):
-        line = line.strip()
-        while len(line) > limit:
-            cut = line.rfind(" ", 0, limit)
-            if cut <= 0:
-                cut = limit
-            out.append(line[:cut].strip())
-            line = line[cut:].strip()
-        if line:
-            out.append(line)
-    return out
-
-
-def _translate_sync(text: str, engine: str) -> str:
-    from deep_translator import GoogleTranslator, MyMemoryTranslator
-    if engine == "google":
-        tr, limit = GoogleTranslator(source="th", target="my"), 4500
-    else:
-        tr, limit = MyMemoryTranslator(source="th-TH", target="my-MM"), 450
-    parts = [tr.translate(p) for p in _chunks(text, limit)]
-    return "\n".join(p for p in parts if p)
+def _lines(text: str):
+    return [ln.strip() for ln in text.split("\n") if ln.strip()]
 
 
 async def translate(text: str, engine: str) -> tuple:
-    async def run(e):
-        return await asyncio.wait_for(run_in_threadpool(_translate_sync, text, e), timeout=25)
-
-    if engine in ("google", "mymemory"):
-        return await run(engine), engine
+    """Returns (burmese, used_label, provider_name). Falls back across free providers."""
     try:
-        res = await run("google")
-        if res:
-            return res, "google (auto)"
-    except Exception as e:
-        log.warning("Google translate failed, falling back to MyMemory: %s", e)
-    return await run("mymemory"), "mymemory (fallback)"
+        my, name, notes = await asyncio.wait_for(run_in_threadpool(tr.translate, text, engine),
+                                                 timeout=tr.TOTAL_BUDGET + 20)
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "บริการแปลภาษาตอบช้าเกินไป กรุณาลองใหม่อีกครั้ง")
+    except tr.AllProvidersFailed as e:
+        raise HTTPException(503, str(e))
+    except tr.ProviderError as e:
+        raise HTTPException(502, "แปลภาษาไม่สำเร็จ: " + str(e))
+    label = tr.PROVIDERS[name].label
+    if engine in tr.PROVIDERS and engine != name:
+        label = f"{label} (สำรอง — {tr.PROVIDERS[engine].label} ใช้ไม่ได้ขณะนี้)"
+    elif engine == "auto" and notes:
+        label = f"{label} (อัตโนมัติ, ข้าม {len(notes)} ช่องทาง)"
+    return my, label, name
 
 
-async def tts_bytes(text: str, voice: str, rate: str, pitch: str) -> bytes:
+class SpeechError(Exception):
+    pass
+
+
+async def _edge_tts(text: str, voice: str, rate: str, pitch: str) -> bytes:
     import edge_tts
     last = None
     for attempt in (1, 2):
@@ -485,7 +531,130 @@ async def tts_bytes(text: str, voice: str, rate: str, pitch: str) -> bytes:
             last = str(e)
             log.warning("edge-tts attempt %s failed: %s", attempt, e)
         await asyncio.sleep(0.8)
-    raise HTTPException(502, f"สร้างเสียงไม่สำเร็จ (edge-tts): {last}")
+    raise SpeechError(f"Microsoft: {last}"[:200])
+
+
+def _tts_chunks(text: str, limit: int = 180):
+    """Google's voice endpoint takes ~200 chars per request: split at sentence marks, then spaces."""
+    out = []
+    for sent in re.split(r"(?<=[။၊.!?\n])", text):
+        sent = sent.strip()
+        if not sent:
+            continue
+        if out and len(out[-1]) + 1 + len(sent) <= limit:
+            out[-1] += " " + sent
+            continue
+        while len(sent) > limit:
+            cut = sent.rfind(" ", 0, limit)
+            cut = cut if cut > limit // 3 else limit
+            out.append(sent[:cut].strip())
+            sent = sent[cut:].strip()
+        if sent:
+            out.append(sent)
+    return out
+
+
+def _google_tts_sync(text: str, lang: str) -> bytes:
+    import requests
+    parts = []
+    chunks = _tts_chunks(text)
+    for i, chunk in enumerate(chunks):
+        if i:
+            time.sleep(0.15)
+        try:
+            r = requests.get("https://translate.google.com/translate_tts", timeout=15,
+                             params={"ie": "UTF-8", "client": "tw-ob", "tl": lang, "q": chunk,
+                                     "total": len(chunks), "idx": i, "textlen": len(chunk)},
+                             headers={"User-Agent": tr.UA, "Referer": "https://translate.google.com/"})
+        except requests.RequestException as e:
+            raise SpeechError("Google: เชื่อมต่อไม่ได้ " + str(e)[:100])
+        if r.status_code == 429:
+            raise SpeechError("Google: ถูกจำกัดความถี่ (429)")
+        if r.status_code != 200 or "audio" not in r.headers.get("content-type", "") or len(r.content) < 200:
+            raise SpeechError(f"Google: สร้างเสียงไม่ได้ (HTTP {r.status_code})")
+        parts.append(r.content)
+    return b"".join(parts)
+
+
+# Pauses longer than ~0.25 s are cut to ~0.3 s; short pauses (normal rhythm) and the voice are untouched.
+# Leading silence is removed and the tail is trimmed. Tested: 0.9 s gap -> 0.32 s, 0.15 s gap unchanged.
+TIGHTEN_FILTER = ("silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.05:"
+                  "stop_periods=-1:stop_duration=0.25:stop_threshold=-45dB:stop_silence=0.05")
+
+
+def _ffmpeg_mp3(data: bytes, tempo: float = 1.0, tighten: bool = False) -> bytes:
+    """Re-encode to the same format edge-tts uses (24 kHz mono 48 kbps MP3) so parts can be joined,
+    and change speed with atempo (keeps the natural pitch, unlike playing the file faster)."""
+    import imageio_ffmpeg
+    args = [imageio_ffmpeg.get_ffmpeg_exe(), "-loglevel", "error", "-f", "mp3", "-i", "pipe:0"]
+    filters = []
+    if tighten:
+        filters.append(TIGHTEN_FILTER)
+    if abs(tempo - 1.0) > 0.01:
+        filters.append(f"atempo={tempo:.3f}")
+    if filters:
+        args += ["-filter:a", ",".join(filters)]
+    # no ID3/Xing header: pieces are joined frame-by-frame, a header in the middle would be a glitch
+    args += ["-ar", "24000", "-ac", "1", "-b:a", "48k", "-map_metadata", "-1", "-id3v2_version", "0",
+             "-write_xing", "0", "-f", "mp3", "pipe:1"]
+    r = subprocess.run(args, input=data, capture_output=True, timeout=90)
+    if r.returncode != 0 or not r.stdout:
+        raise SpeechError("แปลงเสียงไม่สำเร็จ: " + r.stderr.decode(errors="ignore")[-150:])
+    return r.stdout
+
+
+_silence_cache: dict = {}
+
+
+def _silence(ms: int = 350) -> bytes:
+    if ms not in _silence_cache:
+        import imageio_ffmpeg
+        r = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-loglevel", "error", "-f", "lavfi", "-i",
+                            "anullsrc=r=24000:cl=mono", "-t", f"{ms / 1000:.2f}", "-ar", "24000", "-ac", "1",
+                            "-b:a", "48k", "-map_metadata", "-1", "-id3v2_version", "0", "-write_xing", "0",
+                            "-f", "mp3", "pipe:1"], capture_output=True, timeout=30)
+        _silence_cache[ms] = r.stdout if r.returncode == 0 else b""
+    return _silence_cache[ms]
+
+
+def _rate_to_tempo(rate: str) -> float:
+    try:
+        return max(0.5, min(2.0, 1 + int(rate.rstrip("%")) / 100))
+    except ValueError:
+        return 1.0
+
+
+async def _speak_once(text: str, voice: str, rate: str, pitch: str, pace: str = "tight") -> bytes:
+    tight = pace == "tight"
+    if voice.startswith("google-"):
+        raw = await run_in_threadpool(_google_tts_sync, text, voice.split("-", 1)[1])
+        return await run_in_threadpool(_ffmpeg_mp3, raw, _rate_to_tempo(rate), tight)
+    data = await _edge_tts(text, voice, rate, pitch)
+    if tight:
+        try:
+            data = await run_in_threadpool(_ffmpeg_mp3, data, 1.0, True)
+        except Exception as e:  # never lose the announcement because of the pause filter
+            log.warning("pause tightening skipped: %s", e)
+    return data
+
+
+async def tts_bytes(text: str, voice: str, rate: str, pitch: str, pace: str = "tight") -> tuple:
+    """Speak with the chosen voice; if that service fails, use the other free voice service.
+    Returns (mp3_bytes, voice_actually_used)."""
+    voice = LEGACY_VOICES.get(voice, voice)
+    errors = []
+    for v in (voice, VOICE_FALLBACK.get(voice)):
+        if not v:
+            continue
+        try:
+            return await _speak_once(text, v, rate, pitch, pace), v
+        except SpeechError as e:
+            errors.append(str(e))
+            log.warning("TTS voice %s failed: %s", v, e)
+        except Exception as e:
+            errors.append(str(e)[:150])
+            log.warning("TTS voice %s crashed: %s", v, e)
+    raise HTTPException(502, "สร้างเสียงไม่สำเร็จ — " + " · ".join(errors))
 
 
 def _cleanup_audio():
@@ -542,29 +711,47 @@ def _check_voice_params(voice: str, rate: str, pitch: str):
 
 
 async def build_speech(thai: str, burmese: str, voice: str, rate: str, pitch: str,
-                       lang_mode: str, thai_voice: str) -> str:
+                       lang_mode: str, thai_voice: str, pace: str = "tight") -> tuple:
+    """Returns (audio_id, note). note says if a backup voice service had to be used."""
     if lang_mode not in LANG_MODES:
         lang_mode = "my"
+    thai_voice = LEGACY_VOICES.get(thai_voice, thai_voice)
     if thai_voice not in THAI_VOICES:
         thai_voice = DEFAULT_SETTINGS["default_thai_voice"]
-    my_audio = await tts_bytes(burmese, voice, rate, pitch)
+    note = []
+    if pace not in PACE_MODES:
+        pace = "tight"
+    my_audio, used = await tts_bytes(burmese, voice, rate, pitch, pace)
+    if used != voice:
+        note.append("เสียงพม่าใช้ระบบสำรอง")
     if lang_mode == "my" or not thai:
-        return save_audio(my_audio)
-    th_audio = await tts_bytes(thai, thai_voice, rate, "+0Hz")
-    # Both streams are 24 kHz mono MP3 from edge-tts, so frame-level concatenation plays correctly.
-    data = th_audio + my_audio if lang_mode == "th_my" else my_audio + th_audio
-    return save_audio(data)
+        return save_audio(my_audio), " ".join(note)
+    th_audio, used_th = await tts_bytes(thai, thai_voice, rate, "+0Hz", pace)
+    if used_th != thai_voice:
+        note.append("เสียงไทยใช้ระบบสำรอง")
+    # All parts are 24 kHz mono 48 kbps MP3 (Google audio is re-encoded to match), so they can be joined;
+    # a short pause between the two languages sounds more like a person speaking.
+    gap = _silence(400)
+    data = th_audio + gap + my_audio if lang_mode == "th_my" else my_audio + gap + th_audio
+    return save_audio(data), " ".join(note)
 
 
 def record_history(username: str, thai: str, burmese: str, engine: str, voice: str):
+    """Runs in the background after the response is sent (the user never waits for it).
+    One INSERT; trimming old rows only every 25th entry keeps it to a single round-trip."""
     def _ins(c):
-        c.execute("INSERT INTO history (username, thai_text, burmese_text, engine, voice) VALUES (%s,%s,%s,%s,%s)",
-                  (username, thai, burmese, engine, voice))
+        c.execute("""INSERT INTO history (username, thai_text, burmese_text, engine, voice)
+                     VALUES (%s,%s,%s,%s,%s) RETURNING id""", (username, thai, burmese, engine, voice))
+        return c.fetchone()["id"]
+
+    def _prune(c):
         c.execute("""DELETE FROM history WHERE username=%s AND id NOT IN
                      (SELECT id FROM history WHERE username=%s ORDER BY id DESC LIMIT %s)""",
                   (username, username, HISTORY_KEEP_PER_USER))
     try:
-        with_db(_ins)
+        new_id = with_db(_ins, autocommit=True)
+        if new_id % 25 == 0:
+            with_db(_prune, autocommit=True)
     except Exception as e:  # history must never break announcing
         log.warning("history insert failed: %s", e)
 
@@ -609,15 +796,17 @@ def healthz():
     """Use with UptimeRobot / cron-job.org every 5–10 min: keeps Render awake and
     keeps Supabase from pausing the free project (it runs a real query)."""
     info = describe_db()
-    db_ok = False
+    db_ok, hint = False, None
     if info["configured"]:
         try:
-            with_db(lambda c: c.execute("SELECT 1"))
+            with_db(lambda c: c.execute("SELECT 1"), autocommit=True)
             db_ok = True
-        except Exception:
-            db_ok = False
+        except DBUnavailable as e:
+            hint = str(e)  # a Thai cause + fix, never the URL or password
+        except Exception as e:
+            hint = explain_db_error(e)
     return {"ok": True, "version": APP_VERSION, "db_configured": info["configured"],
-            "db_ok": db_ok, "db_kind": info["kind"]}
+            "db_ok": db_ok, "db_kind": info["kind"], "db_hint": hint}
 
 
 # ---- Auth -----------------------------------------------------------------
@@ -626,7 +815,8 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     username = username.strip()
     key = f"{_client_ip(request)}|{username.lower()}"
     _check_rate(key)
-    row = with_db(lambda c: (c.execute("SELECT * FROM users WHERE username=%s", (username,)), c.fetchone())[1])
+    row = with_db(lambda c: (c.execute("SELECT * FROM users WHERE username=%s", (username,)), c.fetchone())[1],
+                  autocommit=True)
     if not row or not verify_password(password, row["password_hash"]):
         _fail.setdefault(key, []).append(time.time())
         raise HTTPException(401, "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
@@ -714,9 +904,12 @@ def _active_admins(c) -> int:
 
 
 @app.patch("/api/users/{user_id}")
-def update_user(user_id: int, role: Optional[str] = Form(None), is_active: Optional[bool] = Form(None),
+def update_user(user_id: int, role: Optional[str] = Form(None), is_active_raw: Optional[str] = Form(None, alias="is_active"),
                 new_password: Optional[str] = Form(None), display_name: Optional[str] = Form(None),
                 admin: dict = Depends(require_admin)):
+    # V15 fix: newer FastAPI turns a *missing* bool form field into False, which disabled the user
+    # whenever an admin only reset a password or changed a role. Parse it ourselves instead.
+    is_active = None if is_active_raw in (None, "") else str(is_active_raw).lower() in ("true", "1", "on", "yes")
     def _upd(c):
         c.execute("SELECT * FROM users WHERE id=%s", (user_id,))
         t = c.fetchone()
@@ -816,12 +1009,14 @@ def system_status(admin: dict = Depends(require_admin)):
     env_secret = os.getenv("JWT_SECRET")
     if not env_secret or len(env_secret) < 32:
         warnings.append("ยังไม่ได้ตั้ง JWT_SECRET (ยาว ≥32 ตัว) — ระบบใช้ secret ที่สุ่มเก็บไว้ในฐานข้อมูลแทน (ปลอดภัย แต่แนะนำตั้งใน Render)")
+    if not os.getenv("MYMEMORY_EMAIL"):
+        warnings.append("ยังไม่ได้ตั้ง MYMEMORY_EMAIL — MyMemory แปลได้แค่ 5,000 ตัวอักษร/วัน (ใส่อีเมลเพิ่มเป็น 50,000)")
     if weak_admin:
         warnings.append("ยังมี Admin ที่ใช้รหัสผ่านเริ่มต้นอยู่ — กรุณาเปลี่ยนรหัสผ่าน")
     return {"app_version": APP_VERSION, "db": info, "db_server": meta["v"].split(" on ")[0],
             "db_time": meta["now"], "counts": counts, "warnings": warnings,
             "render_instance": os.getenv("RENDER_INSTANCE_ID"), "render_commit": os.getenv("RENDER_GIT_COMMIT"),
-            "server_started": SERVER_STARTED}
+            "server_started": SERVER_STARTED, "providers": tr.status()}
 
 
 SERVER_STARTED = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -896,7 +1091,24 @@ def clear_history(user: dict = Depends(current_user)):
 def _cache_get(th: str):
     return with_db(lambda c: (c.execute(
         "UPDATE translations SET hits=hits+1 WHERE text_hash=%s RETURNING burmese_text, engine",
-        (text_hash(th),)), c.fetchone())[1])
+        (text_hash(th),)), c.fetchone())[1], autocommit=True)
+
+
+def _cache_get_many(lines: list) -> dict:
+    """Per-line cache lookup -> {thai_line: burmese_line} (manual corrections included)."""
+    if not lines:
+        return {}
+    hashes = {text_hash(ln): ln for ln in lines}
+
+    def _q(c):
+        c.execute("UPDATE translations SET hits=hits+1 WHERE text_hash = ANY(%s) RETURNING text_hash, burmese_text",
+                  (list(hashes),))
+        return c.fetchall()
+    try:
+        return {hashes[r["text_hash"]]: r["burmese_text"] for r in with_db(_q, autocommit=True)}
+    except Exception as e:
+        log.warning("line cache read failed: %s", e)
+        return {}
 
 
 def _cache_put(th: str, my: str, engine: str, manual: bool = False):
@@ -918,7 +1130,69 @@ def _cache_put(th: str, my: str, engine: str, manual: bool = False):
         log.warning("translation cache write failed: %s", e)
 
 
-def _speech_response(aid: str, my: str, engine: str, cached: bool, fmt: str):
+async def translate_cached(th: str, engine: str, fresh: bool = False) -> tuple:
+    """Whole-text cache -> per-line cache -> translate only the missing lines (one request).
+    Fewer outgoing requests = far fewer "Too many requests" errors."""
+    lines = _lines(th)
+    multi = len(lines) > 1
+    hit = None if fresh else await run_in_threadpool(_cache_get, th)
+    # A whole-text entry wins if an admin corrected it, or for single-line text.
+    if hit and (hit["engine"] == "manual" or not multi):
+        label = "คำแปลที่แก้ไขแล้ว" if hit["engine"] == "manual" else f"{hit['engine']} (จำไว้)"
+        return hit["burmese_text"], label, True
+    # Multi-line text is rebuilt from per-line entries, so a correction of one line is always applied.
+    known = {} if fresh or not multi else await run_in_threadpool(_cache_get_many, lines)
+    missing = list(dict.fromkeys(ln for ln in lines if ln not in known))
+    if not missing:
+        return "\n".join(known[ln] for ln in lines), "จำไว้ (ทีละบรรทัด)", True
+    if hit:  # stored whole (e.g. from V14, or lines could not be mapped back)
+        return hit["burmese_text"], f"{hit['engine']} (จำไว้)", True
+    out, used, name = await translate("\n".join(missing), engine)
+    out_lines = _lines(out)
+    to_save = []
+    if len(out_lines) == len(missing):
+        new = dict(zip(missing, out_lines))
+        if len(missing) > 1 or len(lines) > 1:
+            to_save += [(t_line, m_line, name) for t_line, m_line in new.items()]
+        known.update(new)
+        my = "\n".join(known[ln] for ln in lines)
+    elif not known:
+        my = out  # provider merged/split lines: keep its whole output
+    else:  # cannot map lines back -> translate the whole text once
+        my, used, name = await translate(th, engine)
+    if known and len(missing) < len(lines):
+        used += f" + จำไว้ {len(lines) - len(missing)} บรรทัด"
+    if not multi or len(out_lines) != len(missing):  # multi-line text that mapped cleanly lives in per-line entries
+        to_save.append((th, my, name))
+    await run_in_threadpool(_cache_put_many, to_save)  # one round-trip for all lines
+    return my, used, False
+
+
+def _cache_put_many(items: list):
+    """Save several (thai, burmese, engine) machine translations in ONE statement.
+    Never overwrites a human-corrected ('manual') translation."""
+    rows = {}
+    for th, my, engine in items:
+        if th and my:
+            rows[text_hash(th)] = (text_hash(th), th, my, engine)
+    if not rows:
+        return
+
+    def _p(c):
+        execute_values(c, """INSERT INTO translations (text_hash, thai_text, burmese_text, engine) VALUES %s
+                             ON CONFLICT (text_hash) DO UPDATE SET burmese_text=EXCLUDED.burmese_text,
+                             engine=EXCLUDED.engine, updated_at=NOW() WHERE translations.engine <> 'manual'""",
+                       list(rows.values()))
+    try:
+        with_db(_p, autocommit=True)
+    except Exception as e:
+        log.warning("translation cache write failed: %s", e)
+
+
+def _speech_response(aid, my: str, engine: str, cached: bool, fmt: str):
+    aid, note = aid if isinstance(aid, tuple) else (aid, "")
+    if note:
+        engine = f"{engine} · {note}"
     return {"burmese_text": my, "engine_used": engine, "cached": cached, "audio_id": aid,
             "play_url": f"/audio/{aid}?fmt=mp3", "download_url": f"/download/{aid}?fmt={fmt}"}
 
@@ -928,6 +1202,7 @@ async def process_text(text: str = Form(...), rate: str = Form("+15%"), pitch: s
                        voice: str = Form("my-MM-NilarNeural"), audio_format: str = Form("mp3"),
                        engine: str = Form("auto"), lang_mode: str = Form("my"),
                        thai_voice: str = Form("th-TH-PremwadeeNeural"), fresh: bool = Form(False),
+                       pace: str = Form("tight"), background: BackgroundTasks = None,
                        user: dict = Depends(current_user)):
     th = normalize_text(text)
     if not th:
@@ -938,24 +1213,10 @@ async def process_text(text: str = Form(...), rate: str = Form("+15%"), pitch: s
         raise HTTPException(400, "ตัวเลือกไม่ถูกต้อง")
     _check_voice_params(voice, rate, pitch)
 
-    cached = False
-    hit = None if fresh else await run_in_threadpool(_cache_get, th)
-    if hit:
-        my, used = hit["burmese_text"], ("คำแปลที่แก้ไขแล้ว" if hit["engine"] == "manual" else f"{hit['engine']} (cache)")
-        cached = True
-    else:
-        try:
-            my, used = await translate(th, engine)
-        except asyncio.TimeoutError:
-            raise HTTPException(504, "บริการแปลภาษาตอบช้าเกินไป กรุณาลองใหม่ หรือเปลี่ยนช่องทางแปล")
-        except Exception as e:
-            raise HTTPException(502, f"แปลภาษาไม่สำเร็จ: {e}")
-        if not my:
-            raise HTTPException(502, "ไม่สามารถแปลภาษาได้ในขณะนี้ กรุณาลองใหม่")
-        await run_in_threadpool(_cache_put, th, my, used.split(" ")[0])
+    my, used, cached = await translate_cached(th, engine, fresh)
 
-    aid = await build_speech(th, my, voice, rate, pitch, lang_mode, thai_voice)
-    await run_in_threadpool(record_history, user["username"], th, my, used, voice)
+    aid = await build_speech(th, my, voice, rate, pitch, lang_mode, thai_voice, pace)
+    background.add_task(record_history, user["username"], th, my, used, voice)
     return _speech_response(aid, my, used, cached, audio_format)
 
 
@@ -964,6 +1225,7 @@ async def speak_burmese(burmese_text: str = Form(...), thai_text: str = Form("")
                         pitch: str = Form("+0Hz"), voice: str = Form("my-MM-NilarNeural"),
                         audio_format: str = Form("mp3"), lang_mode: str = Form("my"),
                         thai_voice: str = Form("th-TH-PremwadeeNeural"), save_correction: bool = Form(False),
+                        pace: str = Form("tight"), background: BackgroundTasks = None,
                         user: dict = Depends(current_user)):
     """Speak a given Burmese text (edited translation or a saved phrase) — no translation call."""
     my, th = normalize_text(burmese_text), normalize_text(thai_text)
@@ -980,9 +1242,9 @@ async def speak_burmese(burmese_text: str = Form(...), thai_text: str = Form("")
         if not th:
             raise HTTPException(400, "ต้องมีข้อความภาษาไทยต้นฉบับเพื่อบันทึกคำแปล")
         await run_in_threadpool(_cache_put, th, my, "manual", True)
-    aid = await build_speech(th, my, voice, rate, pitch, lang_mode, thai_voice)
+    aid = await build_speech(th, my, voice, rate, pitch, lang_mode, thai_voice, pace)
     if th:
-        await run_in_threadpool(record_history, user["username"], th, my, "manual" if save_correction else "tts", voice)
+        background.add_task(record_history, user["username"], th, my, "manual" if save_correction else "tts", voice)
     return _speech_response(aid, my, "แก้ไขเอง" if save_correction else "tts", False, audio_format)
 
 
@@ -992,11 +1254,26 @@ async def translate_only(text: str = Form(...), engine: str = Form("auto"), admi
     th = normalize_text(text)
     if not th or engine not in ALLOWED_ENGINES:
         raise HTTPException(400, "ข้อมูลไม่ถูกต้อง")
-    try:
-        my, used = await translate(th, engine)
-    except Exception as e:
-        raise HTTPException(502, f"แปลภาษาไม่สำเร็จ: {e}")
+    my, used, _cached = await translate_cached(th, engine)
     return {"burmese_text": my, "engine_used": used}
+
+
+# ---- Translation providers ---------------------------------------------------------
+@app.get("/api/engines")
+def list_engines(user: dict = Depends(current_user)):
+    return [{"name": p["name"], "label": p["label"], "configured": p["configured"],
+             "cooldown_seconds": p["cooldown_seconds"]} for p in tr.status()]
+
+
+@app.post("/api/engines/test")
+async def test_engines(admin: dict = Depends(require_admin)):
+    return await run_in_threadpool(tr.test_all)
+
+
+@app.post("/api/engines/reset")
+def reset_engines(admin: dict = Depends(require_admin)):
+    tr.reset_cooldowns()
+    return {"status": "success"}
 
 
 # ---- Audio files ----------------------------------------------------------------

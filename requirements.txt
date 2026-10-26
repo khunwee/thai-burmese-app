@@ -3,6 +3,7 @@ uvicorn[standard]>=0.29
 python-multipart>=0.0.9
 psycopg2-binary>=2.9.9
 PyJWT>=2.8
+requests>=2.31
 deep-translator>=1.11.4
 imageio-ffmpeg>=0.5.1
 # edge-tts is kept on a lower bound only: Microsoft changes its service often and

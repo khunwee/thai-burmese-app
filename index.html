@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>วุ้นแปลภาษาพม่า V14</title>
+<title>วุ้นแปลภาษาพม่า V18</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=Noto+Sans+Myanmar:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -96,9 +96,10 @@
       <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-gray-50 p-3 rounded-lg border">
         <div><label class="sel">ผู้พูด (เสียงพม่า)</label>
           <select id="voiceSelect" class="inp" onchange="triggerTranslate()">
-            <option value="my-MM-NilarNeural">หญิง (Nilar)</option>
-            <option value="my-MM-ThihaNeural">ชาย (Thiha)</option></select></div>
-        <div><label class="sel">โทนเสียงจำลองวัย</label>
+            <option value="my-MM-NilarNeural">หญิง (Nilar · Microsoft)</option>
+            <option value="my-MM-ThihaNeural">ชาย (Thiha · Microsoft)</option>
+            <option value="google-my">หญิง (Google)</option></select></div>
+        <div><label class="sel">โทนเสียงจำลองวัย <span class="text-gray-400 font-normal">(Microsoft)</span></label>
           <select id="pitchSelect" class="inp" onchange="triggerTranslate()">
             <option value="+20Hz">เด็ก (แหลม)</option><option value="+10Hz">วัยรุ่น</option>
             <option value="+0Hz">วัยทำงาน (ปกติ)</option><option value="-15Hz">ผู้สูงอายุ (ทุ้ม)</option></select></div>
@@ -109,15 +110,19 @@
             <option value="+40%">+40% (เร็วมาก)</option></select></div>
         <div><label class="sel">ช่องทางแปลภาษา</label>
           <select id="engineSelect" class="inp" onchange="triggerTranslate()">
-            <option value="auto">อัตโนมัติ</option><option value="google">Google</option><option value="mymemory">MyMemory</option></select></div>
+            <option value="auto">อัตโนมัติ (แนะนำ)</option><option value="google">Google</option><option value="google2">Google (สำรอง)</option><option value="mymemory">MyMemory</option></select></div>
         <div><label class="sel">ภาษาที่ประกาศ</label>
           <select id="langModeSelect" class="inp" onchange="toggleThaiVoice(); triggerTranslate()">
             <option value="my">พม่าอย่างเดียว</option><option value="th_my">ไทย → พม่า</option><option value="my_th">พม่า → ไทย</option></select></div>
         <div id="thaiVoiceBox"><label class="sel">เสียงภาษาไทย</label>
-          <select id="thaiVoiceSelect" class="inp">
-            <option value="th-TH-PremwadeeNeural">หญิง (Premwadee)</option>
-            <option value="th-TH-AcharaNeural">หญิง (Achara)</option>
-            <option value="th-TH-NiwatNeural">ชาย (Niwat)</option></select></div>
+          <select id="thaiVoiceSelect" class="inp" onchange="triggerTranslate()">
+            <option value="th-TH-PremwadeeNeural">หญิง (Premwadee · Microsoft)</option>
+            <option value="th-TH-NiwatNeural">ชาย (Niwat · Microsoft)</option>
+            <option value="google-th">หญิง (Google)</option></select></div>
+        <div><label class="sel">จังหวะพูด</label>
+          <select id="paceSelect" class="inp" onchange="triggerTranslate()" title="กระชับ = ตัดช่วงเงียบที่ยาวเกิน 0.3 วินาที ให้ฟังเหมือนคนพูด">
+            <option value="tight">กระชับ เหมือนคนพูด (แนะนำ)</option>
+            <option value="original">ตามต้นฉบับ</option></select></div>
         <div><label class="sel">เล่นซ้ำ</label>
           <select id="repeatSelect" class="inp">
             <option value="1">1 รอบ</option><option value="2">2 รอบ</option><option value="3">3 รอบ</option><option value="5">5 รอบ</option></select></div>
@@ -148,7 +153,7 @@
         </div>
       </div>
     </div>
-    <p class="text-center text-[11px] text-gray-400">V14 · <span id="dbState"></span></p>
+    <p class="text-center text-[11px] text-gray-400">V18 · <span id="dbState"></span></p>
   </div>
 </div>
 
@@ -251,7 +256,12 @@
       <!-- System -->
       <div id="tab-system" class="space-y-3 hidden-view text-sm">
         <div id="systemBox">กำลังโหลด...</div>
-        <button onclick="loadSystem()" class="text-xs border px-3 py-1 rounded-lg">รีเฟรช</button>
+        <div class="flex flex-wrap gap-2">
+          <button onclick="loadSystem()" class="text-xs border px-3 py-1 rounded-lg">รีเฟรช</button>
+          <button onclick="testEngines()" class="text-xs border border-indigo-300 text-indigo-700 px-3 py-1 rounded-lg">ทดสอบช่องทางแปลทั้งหมด</button>
+          <button onclick="resetEngines()" class="text-xs border px-3 py-1 rounded-lg">ล้างสถานะ "พักชั่วคราว"</button>
+        </div>
+        <div id="engineTestBox"></div>
       </div>
     </div>
   </div>
@@ -329,7 +339,7 @@ async function checkServer() {
       st.textContent = "ฐานข้อมูล: ยังไม่ตั้งค่า";
     } else if (!h.db_ok) {
       $("banner").dataset.sticky = "1";
-      showBanner("⚠ เชื่อมต่อฐานข้อมูลไม่ได้ — ตรวจสอบ Supabase (อาจถูก Pause) หรือ DATABASE_URL", "err");
+      showBanner("⚠ " + (h.db_hint || "เชื่อมต่อฐานข้อมูลไม่ได้ — ตรวจสอบ Supabase (อาจถูก Pause) หรือ DATABASE_URL"), "err");
       st.textContent = "ฐานข้อมูล: เชื่อมต่อไม่ได้";
     } else {
       st.textContent = "ฐานข้อมูล: " + (h.db_kind === "supabase" ? "Supabase ✓" : h.db_kind);
@@ -369,15 +379,27 @@ async function showApp() {
     S.role = me.role; store("app_role", S.role);
     ["adminBtn", "saveCorrectionBtn", "saveAsPhraseBtn", "histAllBox"].forEach(id => $(id).classList.toggle("hidden-view", me.role !== "admin"));
     if (me.must_change_password) openPwModal(true);
+    await loadEngines();
     const st = await api("/api/settings");
     applyUserPrefs(st);
     await loadPhrases();
   } catch (e) { if (e.message !== "401") toast(e.message, "err"); }
 }
 
+// translation providers available on the server (V15)
+async function loadEngines() {
+  try {
+    const list = await api("/api/engines");
+    const sel = $("engineSelect"), cur = sel.value;
+    sel.innerHTML = '<option value="auto">อัตโนมัติ (แนะนำ — สลับช่องทางให้เอง)</option>' +
+      list.filter(e => e.configured).map(e => `<option value="${esc(e.name)}">${esc(e.label)}${e.cooldown_seconds > 0 ? " · พักชั่วคราว" : ""}</option>`).join("");
+    if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  } catch (e) {}
+}
+
 // user's own last choices (per browser) override admin defaults
 const PREF_IDS = { engineSelect: "default_engine", voiceSelect: "default_voice", rateSelect: "default_rate", pitchSelect: "default_pitch",
-  formatSelect: "default_format", langModeSelect: "default_lang_mode", thaiVoiceSelect: "default_thai_voice", repeatSelect: "default_repeat" };
+  formatSelect: "default_format", langModeSelect: "default_lang_mode", thaiVoiceSelect: "default_thai_voice", repeatSelect: "default_repeat", paceSelect: "default_pace" };
 function applyUserPrefs(defaults) {
   let mine = {}; try { mine = JSON.parse(load("app_prefs_" + S.username) || "{}"); } catch(e) {}
   for (const [id, key] of Object.entries(PREF_IDS)) {
@@ -406,7 +428,7 @@ function clearText() { $("textInput").value = ""; $("charCount").textContent = "
 
 function speechOpts() {
   return { rate: $("rateSelect").value, pitch: $("pitchSelect").value, voice: $("voiceSelect").value,
-    audio_format: $("formatSelect").value, lang_mode: $("langModeSelect").value, thai_voice: $("thaiVoiceSelect").value };
+    audio_format: $("formatSelect").value, lang_mode: $("langModeSelect").value, thai_voice: $("thaiVoiceSelect").value, pace: $("paceSelect").value };
 }
 function setBusy(on, text) {
   $("speakBtn").disabled = on;
@@ -417,13 +439,19 @@ function setBusy(on, text) {
 async function translateAndSpeak(fresh = false) {
   const text = $("textInput").value.trim();
   if (!text) { toast("กรุณาพิมพ์ข้อความ", "warn"); return; }
+  const key = JSON.stringify([text, $("engineSelect").value, speechOpts()]);
+  if (!fresh && key === S.lastKey && S.lastAudioId) { // nothing changed: replay instead of asking the server again
+    const p = $("audioPlayer"); p.dataset.left = String(Math.max(1, parseInt($("repeatSelect").value) || 1) - 1);
+    p.currentTime = 0; p.play().catch(() => {}); return;
+  }
   const seq = ++S.reqSeq;
   setBusy(true, "กำลังแปลและสร้างเสียง...");
   try {
     const d = await api("/process", { method: "POST", form: { text, engine: $("engineSelect").value, fresh: fresh ? "true" : "false", ...speechOpts() } });
     if (seq !== S.reqSeq) return; // a newer request superseded this one
-    S.lastThai = text; showResult(d);
-  } catch (e) { if (e.message !== "401" && seq === S.reqSeq) toast(e.message, "err", 6000); }
+    S.lastThai = text; S.lastKey = key; showResult(d);
+    if (/สำรอง|ข้าม/.test(d.engine_used || "")) loadEngines();
+  } catch (e) { if (e.message !== "401" && seq === S.reqSeq) { toast(e.message, "err", 9000); loadEngines(); } }
   finally { if (seq === S.reqSeq) setBusy(false); }
 }
 
@@ -435,7 +463,7 @@ async function speakEdited(saveCorrection) {
   try {
     const d = await api("/api/tts", { method: "POST", form: { burmese_text: my, thai_text: S.lastThai, save_correction: saveCorrection ? "true" : "false", ...speechOpts() } });
     if (seq !== S.reqSeq) return;
-    showResult(d); if (saveCorrection) toast("บันทึกคำแปลแล้ว", "ok");
+    S.lastKey = null; showResult(d); if (saveCorrection) toast("บันทึกคำแปลแล้ว", "ok");
   } catch (e) { if (e.message !== "401") toast(e.message, "err", 6000); }
   finally { if (seq === S.reqSeq) setBusy(false); }
 }
@@ -653,7 +681,8 @@ const SETTING_FIELDS = [
   ["default_engine", "Engine เริ่มต้น", "engineSelect"], ["default_voice", "เสียงพม่าเริ่มต้น", "voiceSelect"],
   ["default_pitch", "โทนเสียงเริ่มต้น", "pitchSelect"], ["default_rate", "ความเร็วเริ่มต้น", "rateSelect"],
   ["default_format", "ฟอร์แมตเริ่มต้น", "formatSelect"], ["default_lang_mode", "ภาษาที่ประกาศ", "langModeSelect"],
-  ["default_thai_voice", "เสียงภาษาไทย", "thaiVoiceSelect"], ["default_repeat", "เล่นซ้ำ", "repeatSelect"]];
+  ["default_thai_voice", "เสียงภาษาไทย", "thaiVoiceSelect"], ["default_repeat", "เล่นซ้ำ", "repeatSelect"],
+  ["default_pace", "จังหวะพูด", "paceSelect"]];
 async function loadSettingsForm() {
   const g = $("settingsGrid"); g.innerHTML = "";
   let st = {}; try { st = await api("/api/settings"); } catch (e) { toast(e.message, "err"); }
@@ -683,8 +712,31 @@ async function loadSystem() {
         row("Database / User", `${s.db.database} / ${s.db.user}`), row("DB Server", s.db_server),
         row("จำนวนผู้ใช้", s.counts.users), row("ข้อความสำเร็จรูป", s.counts.phrases), row("ประวัติ", s.counts.history), row("คำแปลที่จำไว้", s.counts.translations),
         row("เซิร์ฟเวอร์เริ่มทำงาน", fmtTime(s.server_started)), row("Render commit", s.render_commit ? s.render_commit.slice(0, 7) : "-")].join("")}</table>
+      <h3 class="font-bold text-gray-700 mt-4 mb-1">ช่องทางแปลภาษา (เรียงตามลำดับที่ใช้)</h3>
+      <div class="border rounded-lg overflow-x-auto"><table class="w-full text-xs">
+        <thead class="bg-gray-100"><tr><th class="p-2 text-left">ช่องทาง</th><th class="p-2">สถานะ</th><th class="p-2">สำเร็จ/ล้ม</th><th class="p-2 text-left">ข้อผิดพลาดล่าสุด</th></tr></thead>
+        <tbody>${(s.providers || []).map(p => `<tr class="border-t align-top">
+          <td class="p-2"><div class="font-medium">${esc(p.label)}</div><div class="text-[10px] text-gray-400">${esc(p.note)}</div></td>
+          <td class="p-2 text-center whitespace-nowrap">${!p.configured ? '<span class="text-gray-400">ยังไม่ตั้งค่า<br>' + esc(p.needs.join(", ")) + '</span>'
+              : p.cooldown_seconds > 0 ? '<span class="text-amber-600 font-bold">พัก ' + Math.ceil(p.cooldown_seconds / 60) + ' นาที</span>'
+              : '<span class="text-green-600 font-bold">พร้อม</span>'}</td>
+          <td class="p-2 text-center">${p.ok} / ${p.fail}</td>
+          <td class="p-2 text-gray-500 break-all">${esc(p.last_error || "-")}</td></tr>`).join("")}</tbody></table></div>
       <p class="text-[11px] text-gray-400 mt-2">ทดสอบความถาวร: สร้างผู้ใช้ → Manual Deploy/Restart ใน Render → กลับมาดูว่า "จำนวนผู้ใช้" ยังเท่าเดิม และ "เซิร์ฟเวอร์เริ่มทำงาน" เปลี่ยนเวลาใหม่</p>`;
   } catch (e) { box.innerHTML = `<p class="text-red-500">${esc(e.message)}</p>`; }
+}
+async function testEngines() {
+  const box = $("engineTestBox"); box.innerHTML = '<p class="text-xs text-gray-500"><span class="spinner"></span> กำลังทดสอบทุกช่องทาง (ใช้เวลาไม่เกิน ~1 นาที)...</p>';
+  try {
+    const rows = await api("/api/engines/test", { method: "POST" });
+    box.innerHTML = '<div class="border rounded-lg divide-y text-xs">' + rows.map(r => `<div class="p-2 flex gap-2">
+      <span class="${r.ok ? "text-green-600" : "text-red-500"} font-bold shrink-0">${r.ok ? "✓" : "✗"}</span>
+      <div class="min-w-0"><b>${esc(r.label)}</b>${r.ms ? ` <span class="text-gray-400">${r.ms} ms</span>` : ""}<div class="${r.ok ? "my-text text-green-800" : "text-gray-500"} break-all">${esc(r.result)}</div></div></div>`).join("") + "</div>";
+    loadSystem(); loadEngines();
+  } catch (e) { box.innerHTML = `<p class="text-red-500 text-xs">${esc(e.message)}</p>`; }
+}
+async function resetEngines() {
+  try { await api("/api/engines/reset", { method: "POST" }); toast("ล้างสถานะแล้ว", "ok"); loadSystem(); loadEngines(); } catch (e) { toast(e.message, "err"); }
 }
 </script>
 </body>

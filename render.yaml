@@ -15,3 +15,16 @@ services:
         generateValue: true
       - key: ADMIN_PASSWORD    # optional: first admin password when the DB is brand-new
         sync: false
+      # ---- V15 free translation providers (optional — see README) ----
+      - key: MYMEMORY_EMAIL    # your real e-mail: MyMemory 5,000 -> 50,000 chars/day
+        sync: false
+      - key: GAS_URL           # your Google Apps Script web app URL (.../exec)
+        sync: false
+      - key: GAS_SECRET        # same text as SECRET in google_apps_script.gs
+        sync: false
+      - key: GEMINI_API_KEY    # free key from aistudio.google.com
+        sync: false
+      - key: CF_ACCOUNT_ID     # Cloudflare Workers AI (optional)
+        sync: false
+      - key: CF_API_TOKEN
+        sync: false

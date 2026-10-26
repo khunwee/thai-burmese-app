@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+output.*
+_v14_backup/
+.venv/
+logs/

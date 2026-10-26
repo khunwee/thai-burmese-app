@@ -468,9 +468,11 @@ def reset_cooldowns():
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-def translate(text: str, engine: str = "auto") -> Tuple[str, str, List[str]]:
+def translate(text: str, engine: str = "auto", last_resort: bool = True) -> Tuple[str, str, List[str]]:
     """Translate Thai text to Burmese. Returns (burmese, provider_name, notes).
-    `engine` is the user's preferred provider; if it fails we fall back automatically."""
+    `engine` is the user's preferred provider; if it fails we fall back automatically.
+    last_resort=False: do not re-try providers that are cooling down (the browser will translate instead),
+    so the server answers "all failed" in well under a second."""
     text = text.strip()
     if not text:
         raise ProviderError("ไม่มีข้อความ", "error")
@@ -502,7 +504,7 @@ def translate(text: str, engine: str = "auto") -> Tuple[str, str, List[str]]:
             _mark_fail(n, pe)
             attempts.append((n, str(e)[:80]))
     # Last resort: everything is cooling down -> try those once anyway (except bad keys/config)
-    for n in skipped:
+    for n in (skipped if last_resort else []):
         if _health[n].get("last_kind") in ("auth", "config"):
             continue  # a wrong key / setting will not fix itself by retrying
         if time.time() > deadline:

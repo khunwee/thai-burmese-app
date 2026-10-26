@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>วุ้นแปลภาษาพม่า V18</title>
+<title>วุ้นแปลภาษาพม่า V19</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=Noto+Sans+Myanmar:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -153,7 +153,7 @@
         </div>
       </div>
     </div>
-    <p class="text-center text-[11px] text-gray-400">V18 · <span id="dbState"></span></p>
+    <p class="text-center text-[11px] text-gray-400">V19 · <span id="dbState"></span></p>
   </div>
 </div>
 
@@ -311,7 +311,10 @@ async function api(path, { method = "GET", form = null, timeout = 90000, auth = 
     if (!res.ok) {
       let msg = data && data.detail;
       if (Array.isArray(msg)) msg = msg.map(x => x.msg).join(", ");
-      throw new Error(msg || `เกิดข้อผิดพลาด (HTTP ${res.status})`);
+      const err = new Error(msg || `เกิดข้อผิดพลาด (HTTP ${res.status})`);
+      err.status = res.status;
+      err.translateFailed = res.headers.get("X-Translate-Failed") === "all";
+      throw err;
     }
     return data;
   }
@@ -436,6 +439,82 @@ function setBusy(on, text) {
   $("loadingDiv").classList.toggle("hidden-view", !on);
 }
 
+// ---------- V19: translate in the browser (user's own IP) when the server cannot ----------
+// Free hosts share one IP between many sites, so key-less Google/MyMemory often answer 429 there.
+// The same services work from the user's browser (tested: CORS allowed, ~0.1 s).
+const BT = { serverDownUntil: 0 };
+function packLines(text, limit, measure) {
+  const out = []; let cur = [];
+  for (const line of text.split("\n")) {
+    let piece = line;
+    while (measure(piece) > limit) {           // very long line: cut at a space
+      let cut = piece.length; while (cut > 1 && measure(piece.slice(0, cut)) > limit) cut = Math.floor(cut * 0.8);
+      const sp = piece.lastIndexOf(" ", cut); if (sp > cut / 3) cut = sp;
+      if (cur.length) { out.push(cur.join("\n")); cur = []; }
+      out.push(piece.slice(0, cut).trim()); piece = piece.slice(cut).trim();
+    }
+    if (cur.length && measure([...cur, piece].join("\n")) > limit) { out.push(cur.join("\n")); cur = []; }
+    cur.push(piece);
+  }
+  if (cur.length && cur.join("").trim()) out.push(cur.join("\n"));
+  return out;
+}
+async function fetchJson(url, opts = {}, ms = 12000) {
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms);
+  try { const r = await fetch(url, { ...opts, signal: ctrl.signal, credentials: "omit" });
+        if (!r.ok) throw new Error("HTTP " + r.status); return await r.json(); }
+  finally { clearTimeout(t); }
+}
+const utf8len = s => new TextEncoder().encode(s).length;
+const BROWSER_ENGINES = [
+  ["browser-google", async text => {
+    const parts = [];
+    for (const c of packLines(text, 4500, s => s.length)) {
+      const j = await fetchJson("https://translate.googleapis.com/translate_a/single?client=gtx&sl=th&tl=my&dt=t",
+        { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: "q=" + encodeURIComponent(c) });
+      parts.push(j[0].map(x => x[0] || "").join("").trim());
+    }
+    return parts.join("\n");
+  }],
+  ["browser-google2", async text => {
+    const parts = [];
+    for (const c of packLines(text, 600, s => s.length)) {
+      const j = await fetchJson("https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=th&tl=my&q=" + encodeURIComponent(c));
+      const first = Array.isArray(j) ? j[0] : (j.sentences || []).map(x => x.trans || "").join("");
+      parts.push((Array.isArray(first) ? first[0] : String(first)).trim());
+    }
+    return parts.join("\n");
+  }],
+  ["browser-mymemory", async text => {
+    const parts = [];
+    for (const c of packLines(text, 480, utf8len)) {
+      const j = await fetchJson("https://api.mymemory.translated.net/get?langpair=th|my&q=" + encodeURIComponent(c));
+      const t = String((j.responseData || {}).translatedText || "");
+      if (j.quotaFinished || /MYMEMORY WARNING/i.test(t) || String(j.responseStatus) !== "200") throw new Error("quota");
+      parts.push(t.trim());
+    }
+    return parts.join("\n");
+  }],
+];
+async function browserTranslate(text) {
+  const errors = [];
+  for (const [name, fn] of BROWSER_ENGINES) {
+    try { const out = (await fn(text)).trim(); if (out) return { text: out, engine: name }; errors.push(name + ": ว่าง"); }
+    catch (e) { errors.push(name + ": " + (e.name === "AbortError" ? "timeout" : e.message)); }
+  }
+  throw new Error("เบราว์เซอร์แปลไม่สำเร็จ (" + errors.join(" · ") + ") — ตรวจอินเทอร์เน็ตของเครื่องนี้");
+}
+async function speakViaBrowser(text, seq, key) {
+  setBusy(true, "เซิร์ฟเวอร์แปลไม่ได้ — กำลังแปลผ่านเบราว์เซอร์ของคุณ...");
+  const bt = await browserTranslate(text);
+  if (seq !== S.reqSeq) return null;
+  setBusy(true, "กำลังสร้างเสียง...");
+  const d = await api("/api/tts", { method: "POST", form: { burmese_text: bt.text, thai_text: text, client_engine: bt.engine, ...speechOpts() } });
+  if (seq !== S.reqSeq) return null;
+  S.lastThai = text; S.lastKey = key; showResult(d);
+  return d;
+}
+
 async function translateAndSpeak(fresh = false) {
   const text = $("textInput").value.trim();
   if (!text) { toast("กรุณาพิมพ์ข้อความ", "warn"); return; }
@@ -447,10 +526,23 @@ async function translateAndSpeak(fresh = false) {
   const seq = ++S.reqSeq;
   setBusy(true, "กำลังแปลและสร้างเสียง...");
   try {
-    const d = await api("/process", { method: "POST", form: { text, engine: $("engineSelect").value, fresh: fresh ? "true" : "false", ...speechOpts() } });
-    if (seq !== S.reqSeq) return; // a newer request superseded this one
-    S.lastThai = text; S.lastKey = key; showResult(d);
-    if (/สำรอง|ข้าม/.test(d.engine_used || "")) loadEngines();
+    // Server first (it has the cache + admin corrections). If its translation services were all
+    // rate-limited recently, go straight to the browser for 10 minutes (the server cache is still used).
+    if (!fresh && Date.now() < BT.serverDownUntil) {
+      try { await speakViaBrowser(text, seq, key); return; } catch (e) { if (e.message === "401") return; /* else ask the server */ }
+    }
+    try {
+      const d = await api("/process", { method: "POST", form: { text, engine: $("engineSelect").value, fresh: fresh ? "true" : "false", client_fallback: "1", ...speechOpts() } });
+      if (seq !== S.reqSeq) return; // a newer request superseded this one
+      S.lastThai = text; S.lastKey = key; showResult(d);
+      BT.serverDownUntil = 0;
+      if (/สำรอง|ข้าม/.test(d.engine_used || "")) loadEngines();
+    } catch (e) {
+      if (!e.translateFailed || seq !== S.reqSeq) throw e;
+      BT.serverDownUntil = Date.now() + 10 * 60 * 1000;
+      try { await speakViaBrowser(text, seq, key); }
+      catch (e2) { if (e2.message === "401") throw e2; throw new Error(e.message + " · " + e2.message); }
+    }
   } catch (e) { if (e.message !== "401" && seq === S.reqSeq) { toast(e.message, "err", 9000); loadEngines(); } }
   finally { if (seq === S.reqSeq) setBusy(false); }
 }
@@ -673,7 +765,11 @@ async function savePhrase() {
 async function autoTranslatePhrase() {
   const th = $("phThai").value.trim(); if (!th) return;
   try { const d = await api("/api/translate", { method: "POST", form: { text: th, engine: "auto" } }); $("phMy").value = d.burmese_text; }
-  catch (e) { toast(e.message, "err"); }
+  catch (e) {
+    if (e.message === "401") return;
+    try { $("phMy").value = (await browserTranslate(th)).text; toast("แปลผ่านเบราว์เซอร์แล้ว (เซิร์ฟเวอร์แปลไม่ได้)", "info"); }
+    catch (e2) { toast(e.message + " · " + e2.message, "err", 9000); }
+  }
 }
 
 // settings

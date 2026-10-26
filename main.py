@@ -1,7 +1,10 @@
 """
-Thai -> Burmese Announcer (วุ้นแปลภาษาพม่า) — V18
+Thai -> Burmese Announcer (วุ้นแปลภาษาพม่า) — V19
 FastAPI + PostgreSQL (Supabase) — deploy on Render free tier.
 
+V19: browser fallback — on a free host every key-less translation service rate-limits the shared IP.
+When the server cannot translate, the user's browser translates (from the user's own IP) and sends the
+Burmese text back; the server still applies its cache / admin corrections and speaks it.
 V16: "tight" speaking pace — silences longer than ~0.3 s are shortened so the voice sounds like a
 person talking instead of a slow, drawn-out reading (measured with ffmpeg silencedetect).
 V15: translation goes through translators.py — several FREE providers with automatic
@@ -43,7 +46,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 import translators as tr
 
-APP_VERSION = "18.0"
+APP_VERSION = "19.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 log = logging.getLogger("announcer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -488,15 +491,17 @@ def _lines(text: str):
     return [ln.strip() for ln in text.split("\n") if ln.strip()]
 
 
-async def translate(text: str, engine: str) -> tuple:
+async def translate(text: str, engine: str, last_resort: bool = True) -> tuple:
     """Returns (burmese, used_label, provider_name). Falls back across free providers."""
     try:
-        my, name, notes = await asyncio.wait_for(run_in_threadpool(tr.translate, text, engine),
+        my, name, notes = await asyncio.wait_for(run_in_threadpool(tr.translate, text, engine, last_resort),
                                                  timeout=tr.TOTAL_BUDGET + 20)
     except asyncio.TimeoutError:
-        raise HTTPException(504, "บริการแปลภาษาตอบช้าเกินไป กรุณาลองใหม่อีกครั้ง")
+        raise HTTPException(504, "บริการแปลภาษาตอบช้าเกินไป กรุณาลองใหม่อีกครั้ง",
+                            headers={"X-Translate-Failed": "all"})
     except tr.AllProvidersFailed as e:
-        raise HTTPException(503, str(e))
+        # the header tells the page it may translate in the browser instead
+        raise HTTPException(503, str(e), headers={"X-Translate-Failed": "all"})
     except tr.ProviderError as e:
         raise HTTPException(502, "แปลภาษาไม่สำเร็จ: " + str(e))
     label = tr.PROVIDERS[name].label
@@ -1009,6 +1014,9 @@ def system_status(admin: dict = Depends(require_admin)):
     env_secret = os.getenv("JWT_SECRET")
     if not env_secret or len(env_secret) < 32:
         warnings.append("ยังไม่ได้ตั้ง JWT_SECRET (ยาว ≥32 ตัว) — ระบบใช้ secret ที่สุ่มเก็บไว้ในฐานข้อมูลแทน (ปลอดภัย แต่แนะนำตั้งใน Render)")
+    if not (os.getenv("GAS_URL") or os.getenv("GEMINI_API_KEY")):
+        warnings.append("ยังไม่มีช่องทางแปลที่ผูกบัญชี (GAS_URL หรือ GEMINI_API_KEY) — บน host ฟรี Google/MyMemory แบบไม่ใช้คีย์ "
+                        "มักถูกจำกัดเพราะใช้ IP ร่วมกัน ระหว่างนี้ระบบให้เบราว์เซอร์ผู้ใช้แปลแทนอัตโนมัติ")
     if not os.getenv("MYMEMORY_EMAIL"):
         warnings.append("ยังไม่ได้ตั้ง MYMEMORY_EMAIL — MyMemory แปลได้แค่ 5,000 ตัวอักษร/วัน (ใส่อีเมลเพิ่มเป็น 50,000)")
     if weak_admin:
@@ -1130,7 +1138,34 @@ def _cache_put(th: str, my: str, engine: str, manual: bool = False):
         log.warning("translation cache write failed: %s", e)
 
 
-async def translate_cached(th: str, engine: str, fresh: bool = False) -> tuple:
+CLIENT_ENGINES = {"browser-google": "Google (แปลผ่านเบราว์เซอร์)", "browser-google2": "Google สำรอง (แปลผ่านเบราว์เซอร์)",
+                  "browser-mymemory": "MyMemory (แปลผ่านเบราว์เซอร์)"}
+
+
+async def cache_lookup(th: str):
+    """Cached Burmese for this Thai text (admin corrections first), or None. No translation call."""
+    lines = _lines(th)
+    multi = len(lines) > 1
+    hit = await run_in_threadpool(_cache_get, th)
+    if hit and (hit["engine"] == "manual" or not multi):
+        return hit["burmese_text"], ("คำแปลที่แก้ไขแล้ว" if hit["engine"] == "manual" else f"{hit['engine']} (จำไว้)")
+    if multi:
+        known = await run_in_threadpool(_cache_get_many, lines)
+        if all(ln in known for ln in lines):
+            return "\n".join(known[ln] for ln in lines), "จำไว้ (ทีละบรรทัด)"
+    if hit:
+        return hit["burmese_text"], f"{hit['engine']} (จำไว้)"
+    return None
+
+
+def _save_client_translation(th: str, my: str, engine: str):
+    """Remember a translation the browser made, per line when the lines line up (never over admin corrections)."""
+    lines, out_lines = _lines(th), _lines(my)
+    items = list(zip(lines, out_lines)) if len(lines) > 1 and len(lines) == len(out_lines) else [(th, my)]
+    _cache_put_many([(a, b, engine) for a, b in items])
+
+
+async def translate_cached(th: str, engine: str, fresh: bool = False, last_resort: bool = True) -> tuple:
     """Whole-text cache -> per-line cache -> translate only the missing lines (one request).
     Fewer outgoing requests = far fewer "Too many requests" errors."""
     lines = _lines(th)
@@ -1147,7 +1182,7 @@ async def translate_cached(th: str, engine: str, fresh: bool = False) -> tuple:
         return "\n".join(known[ln] for ln in lines), "จำไว้ (ทีละบรรทัด)", True
     if hit:  # stored whole (e.g. from V14, or lines could not be mapped back)
         return hit["burmese_text"], f"{hit['engine']} (จำไว้)", True
-    out, used, name = await translate("\n".join(missing), engine)
+    out, used, name = await translate("\n".join(missing), engine, last_resort)
     out_lines = _lines(out)
     to_save = []
     if len(out_lines) == len(missing):
@@ -1159,7 +1194,7 @@ async def translate_cached(th: str, engine: str, fresh: bool = False) -> tuple:
     elif not known:
         my = out  # provider merged/split lines: keep its whole output
     else:  # cannot map lines back -> translate the whole text once
-        my, used, name = await translate(th, engine)
+        my, used, name = await translate(th, engine, last_resort)
     if known and len(missing) < len(lines):
         used += f" + จำไว้ {len(lines) - len(missing)} บรรทัด"
     if not multi or len(out_lines) != len(missing):  # multi-line text that mapped cleanly lives in per-line entries
@@ -1202,8 +1237,8 @@ async def process_text(text: str = Form(...), rate: str = Form("+15%"), pitch: s
                        voice: str = Form("my-MM-NilarNeural"), audio_format: str = Form("mp3"),
                        engine: str = Form("auto"), lang_mode: str = Form("my"),
                        thai_voice: str = Form("th-TH-PremwadeeNeural"), fresh: bool = Form(False),
-                       pace: str = Form("tight"), background: BackgroundTasks = None,
-                       user: dict = Depends(current_user)):
+                       pace: str = Form("tight"), client_fallback: str = Form(""),
+                       background: BackgroundTasks = None, user: dict = Depends(current_user)):
     th = normalize_text(text)
     if not th:
         raise HTTPException(400, "กรุณาพิมพ์ข้อความ")
@@ -1213,7 +1248,8 @@ async def process_text(text: str = Form(...), rate: str = Form("+15%"), pitch: s
         raise HTTPException(400, "ตัวเลือกไม่ถูกต้อง")
     _check_voice_params(voice, rate, pitch)
 
-    my, used, cached = await translate_cached(th, engine, fresh)
+    # client_fallback=1: the page can translate in the browser, so fail fast instead of re-trying
+    my, used, cached = await translate_cached(th, engine, fresh, last_resort=client_fallback != "1")
 
     aid = await build_speech(th, my, voice, rate, pitch, lang_mode, thai_voice, pace)
     background.add_task(record_history, user["username"], th, my, used, voice)
@@ -1225,9 +1261,9 @@ async def speak_burmese(burmese_text: str = Form(...), thai_text: str = Form("")
                         pitch: str = Form("+0Hz"), voice: str = Form("my-MM-NilarNeural"),
                         audio_format: str = Form("mp3"), lang_mode: str = Form("my"),
                         thai_voice: str = Form("th-TH-PremwadeeNeural"), save_correction: bool = Form(False),
-                        pace: str = Form("tight"), background: BackgroundTasks = None,
-                        user: dict = Depends(current_user)):
-    """Speak a given Burmese text (edited translation or a saved phrase) — no translation call."""
+                        pace: str = Form("tight"), client_engine: str = Form(""),
+                        background: BackgroundTasks = None, user: dict = Depends(current_user)):
+    """Speak a given Burmese text (edited translation, a saved phrase, or a translation the browser made)."""
     my, th = normalize_text(burmese_text), normalize_text(thai_text)
     if not my:
         raise HTTPException(400, "ไม่มีข้อความภาษาพม่า")
@@ -1242,10 +1278,22 @@ async def speak_burmese(burmese_text: str = Form(...), thai_text: str = Form("")
         if not th:
             raise HTTPException(400, "ต้องมีข้อความภาษาไทยต้นฉบับเพื่อบันทึกคำแปล")
         await run_in_threadpool(_cache_put, th, my, "manual", True)
+    label, cached = ("แก้ไขเอง" if save_correction else "tts"), False
+    if client_engine and not save_correction:
+        if client_engine not in CLIENT_ENGINES or not th:
+            raise HTTPException(400, "ข้อมูลคำแปลจากเบราว์เซอร์ไม่ถูกต้อง")
+        hit = await cache_lookup(th)  # an admin correction / remembered translation still wins
+        if hit:
+            my, label = hit
+            cached = True
+        else:
+            label = CLIENT_ENGINES[client_engine]
+            background.add_task(_save_client_translation, th, my, client_engine)
     aid = await build_speech(th, my, voice, rate, pitch, lang_mode, thai_voice, pace)
     if th:
-        background.add_task(record_history, user["username"], th, my, "manual" if save_correction else "tts", voice)
-    return _speech_response(aid, my, "แก้ไขเอง" if save_correction else "tts", False, audio_format)
+        hist = "manual" if save_correction else (label if client_engine else "tts")
+        background.add_task(record_history, user["username"], th, my, hist[:50], voice)
+    return _speech_response(aid, my, label, cached, audio_format)
 
 
 @app.post("/api/translate")
